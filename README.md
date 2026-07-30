@@ -15,7 +15,7 @@
 
 ## 📖 Description
 
-Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboard that aggregates live threat intelligence from multiple OSINT sources — AbuseIPDB, AlienVault OTX, Shodan, and IPInfo — and renders the data on an interactive 3D globe. Incoming threat events are automatically classified into attack categories (DDoS, Malware, Port Scan) using a rule-based scoring engine augmented by a Gemini AI or OpenAI layer. The dashboard surface includes real-time arc animations on the globe, a threat feed panel, analyst-grade detail cards, and an AI-powered threat report generator.
+Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboard that aggregates live threat intelligence from multiple OSINT sources, AbuseIPDB, AlienVault OTX, Shodan, and IPInfo and renders the data on an interactive 3D globe. Incoming threat events are automatically classified into attack categories (DDoS, Malware, Port Scan) using a rule-based scoring engine augmented by a Gemini AI or OpenAI layer. The dashboard surface includes real-time arc animations on the globe, a threat feed panel, analyst-grade detail cards, and an AI-powered threat report generator.
 
 ---
 
@@ -110,13 +110,13 @@ See `server/.env.example` for the full list of advanced AI tuning parameters.
 
 ## ✨ Features
 
-- **Multi-source threat fusion** — Aggregates events from AbuseIPDB, OTX, Shodan, and IPInfo in a single pipeline with deduplication
-- **AI-powered classification** — Gemini and/or OpenAI classify ambiguous threat signals into DDoS, Malware, or Scan categories; falls back to rule-based scoring when AI is unavailable
-- **3D interactive globe** — Animated attack arcs rendered in real time using Globe.gl and Three.js; click any arc to inspect the full threat record
-- **SOC dashboard panels** — Live threat feed, severity heatmap, category distribution charts, top attacker table, and country breakdown
-- **Fallback chain** — Gracefully degrades: live APIs → partial data → simulation mode; degraded data is clearly badged in the UI
-- **Simulation mode** — Works entirely offline with realistic synthetic data; no API keys required to explore the UI
-- **AI report generator** — One-click analyst report summarising active threats using Gemini
+- **Multi-source threat fusion** —> Aggregates events from AbuseIPDB, OTX, Shodan, and IPInfo in a single pipeline with deduplication
+- **AI-powered classification** —> Gemini and/or OpenAI classify ambiguous threat signals into DDoS, Malware, or Scan categories; falls back to rule-based scoring when AI is unavailable
+- **3D interactive globe** —> Animated attack arcs rendered in real time using Globe.gl and Three.js; click any arc to inspect the full threat record
+- **SOC dashboard panels** —> Live threat feed, severity heatmap, category distribution charts, top attacker table, and country breakdown
+- **Fallback chain** —> Gracefully degrades: live APIs → partial data → simulation mode; degraded data is clearly badged in the UI
+- **Simulation mode** —> Works entirely offline with realistic synthetic data; no API keys required to explore the UI
+- **AI report generator** —> One-click analyst report summarising active threats using Gemini
 
 ---
 
@@ -150,11 +150,11 @@ See `server/.env.example` for the full list of advanced AI tuning parameters.
 
 ## ⚠️ Known Limitations
 
-- **API rate limits** — Free-tier keys (especially AbuseIPDB and Shodan) impose strict rate limits. When limits are hit, affected sources are skipped and events are badged as `DEGRADED` in the UI.
-- **AI classification requires a valid key** — With `AI_PROVIDER=auto` and no valid Gemini or OpenAI key configured, the system falls back to rule-based scoring automatically. No error is thrown, but classification depth is reduced.
-- **Simulation mode uses static data** — When all live sources are unavailable, the app generates synthetic threat events locally. These are clearly marked as simulated and do not represent real-world attacks.
-- **No authentication** — The Express backend has no API key or auth layer protecting its endpoints. Do not expose it directly to the public internet; run it locally or behind a reverse proxy.
-- **Single-server architecture** — The backend is a single Node.js process with no clustering or persistent storage. It is not production-hardened.
+- **API rate limits** —> Free-tier keys (especially AbuseIPDB and Shodan) impose strict rate limits. When limits are hit, affected sources are skipped and events are badged as `DEGRADED` in the UI.
+- **AI classification requires a valid key** —> With `AI_PROVIDER=auto` and no valid Gemini or OpenAI key configured, the system falls back to rule-based scoring automatically. No error is thrown, but classification depth is reduced.
+- **Simulation mode uses static data** —> When all live sources are unavailable, the app generates synthetic threat events locally. These are clearly marked as simulated and do not represent real-world attacks.
+- **No authentication** —> The Express backend has no API key or auth layer protecting its endpoints. Do not expose it directly to the public internet; run it locally or behind a reverse proxy.
+- **Single-server architecture** —> The backend is a single Node.js process with no clustering or persistent storage. It is not production-hardened.
 
 ---
 
