@@ -1,0 +1,10 @@
+# Normalize line endings to LF on commit, checkout as-is on Windows
+* text=auto eol=lf
+
+# Explicitly declare binary files so git doesn't try to merge them
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text

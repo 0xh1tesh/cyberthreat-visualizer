@@ -1,0 +1,38 @@
+{
+  "name": "cyberthreat-visualizer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Real-time 3D cyberthreat intelligence dashboard with multi-source OSINT fusion and AI-powered classification",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "globe.gl": "^2.29.0",
+    "lucide-react": "^0.359.0",
+    "motion": "^12.38.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.5.0",
+    "three": "^0.183.2",
+    "three-globe": "^2.45.1",
+    "topojson-client": "^3.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@vitejs/plugin-react": "^4.2.1",
+    "tailwindcss": "^4.2.2",
+    "vite": "^5.2.0"
+  },
+  "resolutions": {
+    "three": "^0.160.0"
+  }
+}

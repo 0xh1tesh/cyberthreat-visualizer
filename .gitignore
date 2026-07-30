@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────
+# .gitignore for Cyberthreat Visualizer
+# ─────────────────────────────────────────────────────────────
+
+# ── Dependencies ──────────────────────────────────────────────
+node_modules/
+
+# ── Build output ──────────────────────────────────────────────
+dist/
+.vite/
+
+# ── Environment / Secrets ─────────────────────────────────────
+# .env.example IS tracked — contains only placeholder values
+.env
+.env.local
+.env.*.local
+*.env
+server/.env
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ── OS artifacts ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ──────────────────────────────────────────────
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── Test coverage ─────────────────────────────────────────────
+coverage/
