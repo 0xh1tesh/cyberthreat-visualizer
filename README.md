@@ -1,4 +1,4 @@
-<h1 align="center">🌐 Cyberthreat Visualizer</h1>
+<h1 align="center"> Cyberthreat Visualizer</h1>
 
 <p align="center">
   <strong>Real-time 3D cyber threat intelligence dashboard powered by multi-source OSINT APIs and AI classification</strong>
@@ -13,7 +13,7 @@
 
 ---
 
-## 📖 Description
+##  Description
 
 Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboard that aggregates live threat intelligence from multiple OSINT sources, AbuseIPDB, AlienVault OTX, Shodan, and IPInfo and renders the data on an interactive 3D globe. Incoming threat events are automatically classified into attack categories (DDoS, Malware, Port Scan) using a rule-based scoring engine augmented by a Gemini AI or OpenAI layer. The dashboard surface includes real-time arc animations on the globe, a threat feed panel, analyst-grade detail cards, and an AI-powered threat report generator.
 <img width="1868" height="1051" alt="Screenshot 2026-07-30 020228" src="https://github.com/user-attachments/assets/36fa7727-97f2-447c-aec6-1c73d7166389" />
@@ -37,7 +37,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 ---
 
-## ✅ Prerequisites
+##  Prerequisites
 
 - **Node.js** `>= 18.x` ([download](https://nodejs.org/))
 - **npm** `>= 9.x` (bundled with Node.js)
@@ -45,7 +45,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 ---
 
-## 🚀 Installation
+##  Installation
 
 ```bash
 # 1. Clone the repository
@@ -67,7 +67,7 @@ cp server/.env.example server/.env
 
 ---
 
-## ▶️ Running Locally
+##  Running Locally
 
 The frontend and backend are separate processes and must run **concurrently** in two terminal windows.
 
@@ -87,7 +87,7 @@ Then open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
-## 🔑 Environment Variables
+##  Environment Variables
 
 Copy `server/.env.example` to `server/.env` and populate the values below. The `.env` file is **never committed** to version control.
 
@@ -110,7 +110,7 @@ See `server/.env.example` for the full list of advanced AI tuning parameters.
 
 ---
 
-## ✨ Features
+##  Features
 
 - **Multi-source threat fusion** —> Aggregates events from AbuseIPDB, OTX, Shodan, and IPInfo in a single pipeline with deduplication
 - **AI-powered classification** —> Gemini and/or OpenAI classify ambiguous threat signals into DDoS, Malware, or Scan categories; falls back to rule-based scoring when AI is unavailable
@@ -150,7 +150,7 @@ See `server/.env.example` for the full list of advanced AI tuning parameters.
 
 ---
 
-## ⚠️ Known Limitations
+##  Known Limitations
 
 - **API rate limits** —> Free-tier keys (especially AbuseIPDB and Shodan) impose strict rate limits. When limits are hit, affected sources are skipped and events are badged as `DEGRADED` in the UI.
 - **AI classification requires a valid key** —> With `AI_PROVIDER=auto` and no valid Gemini or OpenAI key configured, the system falls back to rule-based scoring automatically. No error is thrown, but classification depth is reduced.
