@@ -1,488 +1,351 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import {
-  X,
-  Loader,
-  AlertTriangle,
-  Zap,
-  Shield,
-  ChevronRight,
-  Cpu,
-  CheckCircle,
-  AlertCircle,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { AlertCircle, Check, Copy, ExternalLink, Loader2, Sparkles, X } from 'lucide-react';
+import { Badge, IconButton } from './ui';
+import { cn } from '../lib/utils';
+import { apiFetch, describeApiError, isAbortError } from '../lib/api';
+import { classMeta, TONE } from '../lib/palette';
+import { getSignalDisplayMeta } from '../lib/threat-normalize';
 
-const ThreatReportModal = ({ threat, isOpen, onClose, aiProvider = 'auto' }) => {
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(false);
+const SUMMARY_TTL_MS = 7 * 60 * 1000;
+const summaryCache = new Map();
+
+const MITRE_MAP = {
+  DDOS: { id: 'T1499', name: 'Endpoint Denial of Service' },
+  MALWARE: { id: 'T1204', name: 'User Execution' },
+  SCAN: { id: 'T1595', name: 'Active Scanning' },
+  LOW: { id: 'T1595', name: 'Active Scanning' },
+};
+
+const RISK_TONE = { HIGH: 'text-crit', MEDIUM: 'text-warn', LOW: 'text-ok' };
+
+const cacheKey = (ip, provider) => `${ip}|${provider}`;
+
+const readSummary = (key) => {
+  const entry = summaryCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    summaryCache.delete(key);
+    return null;
+  }
+  return entry.value;
+};
+
+const buildRuleReasoning = (classification, signals, sources) => {
+  const parts = [];
+  const ok = (key) => String(sources?.[key] || '').toLowerCase() === 'ok';
+  if (ok('otx')) parts.push(Number(signals?.otxHits) > 0 ? `${signals.otxHits} OTX pulse hits` : 'no OTX pulse hits');
+  if (ok('abuseipdb')) parts.push(`AbuseIPDB confidence ${Math.round(Number(signals?.abuseScore) || 0)}`);
+  else parts.push('AbuseIPDB data unavailable');
+  if (ok('shodan')) parts.push(`${Number(signals?.portExposure) || 0} exposed ports`);
+  else parts.push('port data unavailable');
+  return `Classified as ${classMeta(classification).label} from ${parts.join(', ')}.`;
+};
+
+const Section = ({ title, children, action }) => (
+  <section className="space-y-3">
+    <div className="flex items-center justify-between gap-3">
+      <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
+      {action}
+    </div>
+    {children}
+  </section>
+);
+
+const SignalTile = ({ label, meta }) => (
+  <div className="rounded-lg border border-line bg-canvas p-3" title={meta.tooltip || undefined}>
+    <p className="text-2xs font-medium uppercase tracking-wide text-ink-faint">{label}</p>
+    <p className={cn('mt-1 text-lg font-semibold tabular', meta.faded ? 'text-ink-faint' : 'text-ink')}>
+      {meta.faded ? 'Unavailable' : meta.text}
+    </p>
+  </div>
+);
+
+const FOCUSABLE = 'a[href],button:not([disabled]),select,textarea,input,[tabindex]:not([tabindex="-1"])';
+
+const ReportDialog = ({ threat, onClose, aiProvider }) => {
+  const titleId = useId();
+  const ip = threat.origin?.ip || '';
+  const dialogRef = useRef(null);
+  const requestRef = useRef(null);
+  const [status, setStatus] = useState('idle');
+  const [summary, setSummary] = useState(() => (ip ? readSummary(cacheKey(ip, aiProvider)) : null));
   const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
 
-  const normalizeSourceStatus = (sourceStatus = {}) => {
-    const readStatus = (key) => {
-      const normalized = String(sourceStatus?.[key] || '').toLowerCase();
-      return normalized === 'ok' ? 'ok' : 'failed';
-    };
+  const canSummarize = Boolean(ip) && !threat.synthetic;
+  const meta = classMeta(threat.classification);
+  const tone = TONE[meta.tone];
 
-    return {
-      abuseipdb: readStatus('abuseipdb'),
-      otx: readStatus('otx'),
-      shodan: readStatus('shodan'),
-    };
-  };
+  const abortRequest = useCallback(() => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+  }, []);
 
-  const getSignalDisplayMeta = (value, sourceKey, sourceStatus = {}) => {
-    const normalizedStatus = normalizeSourceStatus(sourceStatus);
-    const sourceLabels = {
-      abuseipdb: 'AbuseIPDB',
-      otx: 'OTX',
-      shodan: 'Shodan',
-    };
+  // A late response must never land after the dialog closes.
+  useEffect(() => abortRequest, [abortRequest]);
 
-    if (normalizedStatus[sourceKey] !== 'ok') {
-      return {
-        text: '0 (no data)',
-        faded: true,
-        tooltip: `${sourceLabels[sourceKey] || sourceKey} unavailable`,
-      };
-    }
-
-    const numeric = Number(value);
-    return {
-      text: Number.isFinite(numeric) ? numeric.toFixed(0) : '0',
-      faded: false,
-      tooltip: '',
-    };
-  };
-
-  const getAiSummaryUnavailableMessage = (aiSummary) => {
-    const reasonCode = String(aiSummary?.reason_code || '').toLowerCase();
-    if (reasonCode === 'no_provider') {
-      if (aiProvider === 'off') {
-        return 'AI generation is disabled. Switch AI mode from Off to Auto, OpenAI, or Gemini.';
-      }
-      return 'No usable AI provider is configured for the selected mode. Check provider keys and mode settings.';
-    }
-    if (reasonCode === 'timeout') {
-      return 'AI generation timed out. Retry once or increase report timeout in backend configuration.';
-    }
-    if (reasonCode === 'upstream_http_error') {
-      return 'The AI provider rejected this request. Verify API key status, quota, and model access.';
-    }
-    if (reasonCode === 'schema_mismatch') {
-      return 'The AI provider replied, but response format validation failed. Retry to generate a fresh summary.';
-    }
-    if (reasonCode === 'network_error') {
-      return 'Network error while reaching the AI provider. Check backend connectivity and retry.';
-    }
-    return 'AI summary is unavailable right now. Check provider configuration and try again.';
-  };
-
-  const mapThreatForReport = (rawThreat) => {
-    if (!rawThreat || typeof rawThreat !== 'object') return null;
-
-    const signalSources = Array.isArray(rawThreat?.signals?.usedSources)
-      ? rawThreat.signals.usedSources
-      : Array.isArray(rawThreat?.signals?.sourcesUsed)
-        ? rawThreat.signals.sourcesUsed
-        : [];
-
-    const sourceStatus = normalizeSourceStatus(
-      rawThreat?.sources || rawThreat?.signals?.sourceStatus || {}
-    );
-
-    return {
-      sourceIp: String(rawThreat?.origin?.ip || rawThreat?.sourceIp || rawThreat?.ip || ''),
-      sourceCountry: String(rawThreat?.origin?.country || rawThreat?.sourceCountry || ''),
-      targetCountry: String(rawThreat?.target?.country || rawThreat?.targetCountry || ''),
-      timestamp: rawThreat?.timestamp
-        ? new Date(rawThreat.timestamp).getTime()
-        : Date.now(),
-      classification: String(rawThreat?.classification || 'LOW'),
-      score: Number.isFinite(rawThreat?.score) ? rawThreat.score : 0,
-      signals: {
-        abuseScore: typeof rawThreat?.signals?.abuseScore === 'number' ? rawThreat.signals.abuseScore : 0,
-        otxHits: typeof rawThreat?.signals?.otxHits === 'number' ? rawThreat.signals.otxHits : 0,
-        portExposure: typeof rawThreat?.signals?.portExposure === 'number' ? rawThreat.signals.portExposure : 0,
-        usedSources: signalSources,
-        sourcesUsed: signalSources,
-        sourceStatus,
-      },
-      sources: sourceStatus,
-      ai: {
-        used: Boolean(rawThreat?.ai?.used),
-        confidence: typeof rawThreat?.ai?.confidence === 'number' ? rawThreat.ai.confidence : null,
-        reason: rawThreat?.ai?.reason ? String(rawThreat.ai.reason) : null,
-      },
-    };
-  };
-
+  // Focus management + Escape + Tab trap.
   useEffect(() => {
-    if (!isOpen || !threat) {
-      setReport(null);
-      setError(null);
-      return;
-    }
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.querySelector('[data-autofocus]')?.focus();
 
-    const fetchReport = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const headers = {
-          'Content-Type': 'application/json',
-          'X-AI-Provider': aiProvider,
-        };
-
-        const threatPayload = mapThreatForReport(threat);
-        if (!threatPayload) {
-          throw new Error('Invalid threat payload');
-        }
-
-        const response = await fetch('http://localhost:5000/api/report', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            threat: threatPayload,
-            provider: aiProvider,
-            mode: aiProvider,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        setReport(data);
-      } catch (err) {
-        setError(err.message || 'Failed to fetch report');
-      } finally {
-        setLoading(false);
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (previous instanceof HTMLElement) previous.focus();
+    };
+  }, [onClose]);
 
-    fetchReport();
-  }, [isOpen, threat, aiProvider]);
+  const generate = async () => {
+    if (!canSummarize || status === 'loading') return;
+    abortRequest();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setStatus('loading');
+    setError(null);
 
-  const getRiskLevelColor = (riskLevel) => {
-    if (!riskLevel) return 'text-slate-400';
-    const level = String(riskLevel).toUpperCase();
-    if (level === 'CRITICAL') return 'text-red-400';
-    if (level === 'HIGH') return 'text-orange-400';
-    if (level === 'MEDIUM') return 'text-yellow-400';
-    return 'text-green-400';
+    try {
+      const data = await apiFetch('/report', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'X-AI-Provider': aiProvider },
+        body: {
+          provider: aiProvider,
+          threat: {
+            sourceIp: ip,
+            sourceCountry: threat.origin.country,
+            classification: threat.classification,
+            score: threat.score,
+            timestamp: threat.timestamp?.getTime?.() ?? Date.now(),
+            signals: {
+              abuseScore: threat.signals?.abuseScore ?? 0,
+              otxHits: threat.signals?.otxHits ?? 0,
+              portExposure: threat.signals?.portExposure ?? 0,
+            },
+            sources: threat.sources,
+            ai: { used: Boolean(threat.ai?.used), confidence: threat.ai?.confidence, reason: threat.ai?.reason },
+          },
+        },
+      });
+
+      const ai = data?.ai_summary;
+      if (!ai?.used) {
+        setError(describeApiError({ code: ai?.reason_code }));
+        setStatus('error');
+        return;
+      }
+      const result = {
+        assessment: String(ai.executive_summary || ''),
+        technical: String(ai.technical_analysis || ''),
+        action: String(ai.recommended_action || ''),
+        risk: String(ai.risk_level || 'MEDIUM').toUpperCase(),
+        provider: String(ai.provider || aiProvider).toUpperCase(),
+      };
+      summaryCache.set(cacheKey(ip, aiProvider), { value: result, expiresAt: Date.now() + SUMMARY_TTL_MS });
+      setSummary(result);
+      setStatus('idle');
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setError(describeApiError(err));
+      setStatus('error');
+    }
   };
 
-  const getRiskLevelBgColor = (riskLevel) => {
-    if (!riskLevel) return 'bg-slate-600/20';
-    const level = String(riskLevel).toUpperCase();
-    if (level === 'CRITICAL') return 'bg-red-600/20';
-    if (level === 'HIGH') return 'bg-orange-600/20';
-    if (level === 'MEDIUM') return 'bg-yellow-600/20';
-    return 'bg-green-600/20';
+  const copyIp = async () => {
+    try {
+      await navigator.clipboard.writeText(ip);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
   };
+
+  const reasoning = useMemo(() => {
+    if (threat.ai?.used && threat.ai.reason) return threat.ai.reason;
+    return buildRuleReasoning(threat.classification, threat.signals, threat.sources);
+  }, [threat]);
+
+  const mitre = MITRE_MAP[meta.key] || MITRE_MAP.LOW;
+  const abuse = getSignalDisplayMeta(threat.signals?.abuseScore, 'abuseipdb', threat.sources);
+  const otx = getSignalDisplayMeta(threat.signals?.otxHits, 'otx', threat.sources);
+  const ports = getSignalDisplayMeta(threat.signals?.portExposure, 'shodan', threat.sources);
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          {/* Backdrop */}
+        <motion.div
+          className="fixed inset-0 z-50 grid place-items-end bg-black/70 sm:place-items-center sm:p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+        >
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-          />
-
-          {/* Modal */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 16 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl"
           >
-            <div className="bg-slate-900 border border-slate-700/50 rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-              {/* Header */}
-              <div className="sticky top-0 bg-slate-900 border-b border-slate-700/30 p-6 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Cpu className="w-5 h-5 text-cyber-blue" />
-                  <h2 className="text-lg font-semibold text-slate-100">
-                    Threat Report
-                  </h2>
+            <header className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 id={titleId} className="text-base font-semibold text-ink">Threat report</h2>
+                  <Badge tone={meta.tone}>{meta.label}</Badge>
+                  {threat.synthetic && <Badge tone="info">Simulated</Badge>}
                 </div>
-                <button
-                  onClick={onClose}
-                  className="p-1 hover:bg-slate-800 rounded transition-colors"
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
+                  <span>{threat.origin.country}</span>
+                  {ip && (
+                    <button
+                      type="button"
+                      onClick={copyIp}
+                      className="inline-flex items-center gap-1.5 font-mono text-ink hover:text-info"
+                      aria-label={`Copy IP address ${ip}`}
+                    >
+                      {ip}
+                      {copied ? <Check size={12} className="text-ok" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+                    </button>
+                  )}
+                  <time className="tabular" dateTime={threat.timestamp.toISOString()}>{threat.timestamp.toLocaleString()}</time>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-start gap-3">
+                <div className="text-right">
+                  <p className={cn('text-3xl font-semibold leading-8 tabular', tone.text)}>{Math.round(threat.score)}</p>
+                  <p className="text-2xs text-ink-faint">threat score</p>
+                </div>
+                <IconButton label="Close report" onClick={onClose} data-autofocus>
+                  <X size={15} aria-hidden="true" />
+                </IconButton>
+              </div>
+            </header>
+
+            <div className="scroll-thin min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
+              <Section title="Signals">
+                <div className="grid grid-cols-3 gap-3">
+                  <SignalTile label="Abuse score" meta={abuse} />
+                  <SignalTile label="OTX hits" meta={otx} />
+                  <SignalTile label="Open ports" meta={ports} />
+                </div>
+              </Section>
+
+              <Section
+                title="AI incident summary"
+                action={canSummarize && !summary && status !== 'error' && (
+                  <button
+                    type="button"
+                    onClick={generate}
+                    disabled={status === 'loading'}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {status === 'loading' ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Sparkles size={13} className="text-ai" aria-hidden="true" />}
+                    {status === 'loading' ? 'Generating' : 'Generate summary'}
+                  </button>
+                )}
+              >
+                {!canSummarize && (
+                  <p className="rounded-lg border border-line bg-canvas p-4 text-[13px] text-ink-muted">
+                    AI summaries are only available for live threats with a real source IP.
+                  </p>
+                )}
+
+                {canSummarize && !summary && status !== 'error' && (
+                  <p className="rounded-lg border border-line bg-canvas p-4 text-[13px] text-ink-muted" aria-live="polite">
+                    {status === 'loading' ? 'Asking the model for an incident summary…' : 'No summary generated yet.'}
+                  </p>
+                )}
+
+                {status === 'error' && (
+                  <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-warn/30 bg-warn/10 p-4">
+                    <span className="flex items-center gap-2 text-[13px] text-warn">
+                      <AlertCircle size={15} aria-hidden="true" /> {error}
+                    </span>
+                    <button type="button" onClick={generate} className="rounded-md border border-warn/40 px-2.5 py-1 text-xs font-medium text-warn hover:bg-warn/10">
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {summary && (
+                  <div className="space-y-4 rounded-lg border border-ai/30 bg-ai/5 p-4">
+                    <div className="flex items-center gap-2">
+                      <Badge tone="ai"><Sparkles size={11} aria-hidden="true" /> {summary.provider}</Badge>
+                      <span className={cn('text-xs font-medium', RISK_TONE[summary.risk] || 'text-warn')}>{summary.risk} risk</span>
+                    </div>
+                    {[['Assessment', summary.assessment], ['Technical analysis', summary.technical], ['Recommended action', summary.action]]
+                      .filter(([, text]) => text)
+                      .map(([label, text]) => (
+                        <div key={label}>
+                          <p className="text-2xs font-medium uppercase tracking-wide text-ink-faint">{label}</p>
+                          <p className="mt-1 text-[13px] leading-6 text-ink">{text}</p>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </Section>
+
+              <Section title="Classification">
+                <div className="space-y-3 rounded-lg border border-line bg-canvas p-4 text-[13px]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-muted">Method</span>
+                    <span className="text-ink">{threat.ai?.used ? 'AI-assisted' : 'Rule engine'}</span>
+                  </div>
+                  {threat.ai?.used && threat.ai.confidence > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-ink-muted">Model confidence</span>
+                      <span className="tabular text-ink">{Math.round(threat.ai.confidence)}%</span>
+                    </div>
+                  )}
+                  <p className="border-t border-line pt-3 leading-6 text-ink-muted">{reasoning}</p>
+                </div>
+                <a
+                  href={`https://attack.mitre.org/techniques/${mitre.id}/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-md border border-line px-2.5 py-1.5 font-mono text-xs text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
-                </button>
-              </div>
-
-              {/* Content */}
-              <div className="p-6 space-y-6">
-                {loading && (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader className="w-6 h-6 text-cyber-blue animate-spin" />
-                  </div>
-                )}
-
-                {error && (
-                  <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg flex gap-3">
-                    <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm text-red-200 font-medium">Error Loading Report</p>
-                      <p className="text-xs text-red-300/70 mt-1">{error}</p>
-                    </div>
-                  </div>
-                )}
-
-                {report && !loading && (
-                  <>
-                    {/* Threat Basics */}
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">
-                        Threat Details
-                      </h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-4">
-                          <p className="text-xs text-slate-400 mb-1">IP Address</p>
-                          <p className="text-sm font-mono text-cyber-blue">{report.ip || 'N/A'}</p>
-                        </div>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-4">
-                          <p className="text-xs text-slate-400 mb-1">Classification</p>
-                          <p className="text-sm font-semibold text-slate-200">
-                            {report.classification || 'LOW'}
-                          </p>
-                        </div>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-4">
-                          <p className="text-xs text-slate-400 mb-1">Threat Score</p>
-                          <p className="text-sm font-semibold text-slate-200">
-                            {Number.isFinite(report.score) ? report.score.toFixed(1) : 'N/A'}
-                          </p>
-                        </div>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-4">
-                          <p className="text-xs text-slate-400 mb-1">Timestamp</p>
-                          <p className="text-xs text-slate-300">
-                            {report.timestamp
-                              ? new Date(report.timestamp).toLocaleString()
-                              : 'N/A'}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Signals */}
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">
-                        Signal Analysis
-                      </h3>
-                      {(() => {
-                        const sourceStatus = normalizeSourceStatus(
-                          report?.sources_status || report?.signals?.sourceStatus || {}
-                        );
-                        const degradedSources = Object.entries(sourceStatus)
-                          .filter((entry) => entry[1] !== 'ok')
-                          .map((entry) => entry[0]);
-                        if (degradedSources.length === 0) return null;
-                        return (
-                          <div className="text-[10px] text-amber-300 font-mono uppercase tracking-[0.08em]" title="One or more threat intelligence providers are unavailable">
-                            DEGRADED DATA
-                          </div>
-                        );
-                      })()}
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-3">
-                          <p className="text-xs text-slate-400 mb-2">Abuse Score</p>
-                          {(() => {
-                            const meta = getSignalDisplayMeta(
-                              report.signals?.abuseScore,
-                              'abuseipdb',
-                              report?.sources_status || report?.signals?.sourceStatus || {}
-                            );
-                            return (
-                              <p title={meta.tooltip} className={`text-lg font-semibold ${meta.faded ? 'text-slate-500 italic' : 'text-amber-400'}`}>
-                                {meta.text}
-                              </p>
-                            );
-                          })()}
-                        </div>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-3">
-                          <p className="text-xs text-slate-400 mb-2">OTX Hits</p>
-                          {(() => {
-                            const meta = getSignalDisplayMeta(
-                              report.signals?.otxHits,
-                              'otx',
-                              report?.sources_status || report?.signals?.sourceStatus || {}
-                            );
-                            return (
-                              <p title={meta.tooltip} className={`text-lg font-semibold ${meta.faded ? 'text-slate-500 italic' : 'text-violet-400'}`}>
-                                {meta.text}
-                              </p>
-                            );
-                          })()}
-                        </div>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded p-3">
-                          <p className="text-xs text-slate-400 mb-2">Open Ports</p>
-                          {(() => {
-                            const meta = getSignalDisplayMeta(
-                              report.signals?.portExposure,
-                              'shodan',
-                              report?.sources_status || report?.signals?.sourceStatus || {}
-                            );
-                            return (
-                              <p title={meta.tooltip} className={`text-lg font-semibold ${meta.faded ? 'text-slate-500 italic' : 'text-cyan-400'}`}>
-                                {meta.text}
-                              </p>
-                            );
-                          })()}
-                        </div>
-                      </div>
-                      {Array.isArray(report.sources) && report.sources.length > 0 && (
-                        <div className="text-xs text-slate-400">
-                          Sources: <span className="text-slate-300">{report.sources.join(', ')}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* AI Summary Section */}
-                    {report.ai_summary && (
-                      <div className="space-y-4 border-t border-slate-700/30 pt-6">
-                        <div className="flex items-center gap-2">
-                          <Zap className="w-4 h-4 text-cyber-blue" />
-                          <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">
-                            AI Incident Summary
-                          </h3>
-                          {report.ai_summary.used ? (
-                            <span className="text-xs px-2 py-1 bg-cyber-blue/20 border border-cyber-blue/50 text-cyber-blue rounded">
-                              AI Generated
-                            </span>
-                          ) : (
-                            <span className="text-xs px-2 py-1 bg-slate-600/30 border border-slate-600/50 text-slate-400 rounded">
-                              Unavailable
-                            </span>
-                          )}
-                        </div>
-
-                        {report.ai_summary.used ? (
-                          <div className="space-y-4">
-                            {report.ai_summary.provider && (
-                              <div className="text-xs text-slate-400">
-                                Provider: <span className="text-cyber-blue uppercase">{report.ai_summary.provider}</span>
-                              </div>
-                            )}
-
-                            {/* Risk Level */}
-                            {report.ai_summary.risk_level && (
-                              <div className={`p-4 rounded-lg border ${getRiskLevelBgColor(
-                                report.ai_summary.risk_level
-                              )} border-current/30`}>
-                                <p className="text-xs text-slate-400 mb-1">Risk Level</p>
-                                <p className={`text-sm font-semibold ${getRiskLevelColor(
-                                  report.ai_summary.risk_level
-                                )}`}>
-                                  {report.ai_summary.risk_level}
-                                </p>
-                              </div>
-                            )}
-
-                            {/* Executive Summary */}
-                            {report.ai_summary.executive_summary && (
-                              <div className="bg-slate-800/40 border border-slate-700/30 rounded-lg p-4">
-                                <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                                  Executive Summary
-                                </p>
-                                <p className="text-sm text-slate-300 leading-relaxed">
-                                  {report.ai_summary.executive_summary}
-                                </p>
-                              </div>
-                            )}
-
-                            {/* Technical Analysis */}
-                            {report.ai_summary.technical_analysis && (
-                              <div className="bg-slate-800/40 border border-slate-700/30 rounded-lg p-4">
-                                <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                                  Technical Analysis
-                                </p>
-                                <p className="text-sm text-slate-300 leading-relaxed">
-                                  {report.ai_summary.technical_analysis}
-                                </p>
-                              </div>
-                            )}
-
-                            {/* Recommended Action */}
-                            {report.ai_summary.recommended_action && (
-                              <div className="bg-slate-800/40 border border-slate-700/30 rounded-lg p-4">
-                                <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-                                  <Shield className="w-4 h-4 text-green-400" />
-                                  Recommended Action
-                                </p>
-                                <p className="text-sm text-slate-300 leading-relaxed">
-                                  {report.ai_summary.recommended_action}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="p-4 bg-slate-800/40 border border-slate-700/30 rounded-lg">
-                            <p className="text-sm text-slate-400">
-                              {getAiSummaryUnavailableMessage(report.ai_summary)}
-                            </p>
-                            {report.ai_summary.reason_detail && (
-                              <p className="text-xs text-slate-500 mt-2 font-mono">
-                                Detail: {report.ai_summary.reason_detail}
-                              </p>
-                            )}
-                            {Array.isArray(report.ai_summary.attempted_providers) && report.ai_summary.attempted_providers.length > 0 && (
-                              <p className="text-xs text-slate-500 mt-1 font-mono">
-                                Attempted: {report.ai_summary.attempted_providers.join(', ')}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Rule-Based AI if available */}
-                    {report.ai && (
-                      <div className="border-t border-slate-700/30 pt-6 space-y-3">
-                        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                          Threat Classification
-                        </h3>
-                        <div className="bg-slate-800/40 border border-slate-700/30 rounded-lg p-4 space-y-2">
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs text-slate-400">Method</span>
-                            <span className="text-sm font-semibold text-slate-300">
-                              {report.ai.used ? 'AI Assisted' : 'Rule-Based'}
-                            </span>
-                          </div>
-                          {report.ai.confidence > 0 && (
-                            <div className="flex justify-between items-center">
-                              <span className="text-xs text-slate-400">Confidence</span>
-                              <span className="text-sm font-semibold text-cyber-blue">
-                                {report.ai.confidence.toFixed(0)}%
-                              </span>
-                            </div>
-                          )}
-                          {report.ai.reasoning && (
-                            <div className="pt-2 border-t border-slate-700/30">
-                              <p className="text-xs text-slate-400 mb-1">Reasoning</p>
-                              <p className="text-xs text-slate-300">{report.ai.reasoning}</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                  MITRE ATT&amp;CK {mitre.id} · {mitre.name}
+                  <ExternalLink size={12} aria-hidden="true" />
+                </a>
+              </Section>
             </div>
           </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+        </motion.div>
   );
 };
+
+const ThreatReportModal = ({ threat, isOpen, onClose, aiProvider = 'auto' }) => (
+  <AnimatePresence>
+    {isOpen && threat && (
+      <ReportDialog key={`${threat.id}|${aiProvider}`} threat={threat} onClose={onClose} aiProvider={aiProvider} />
+    )}
+  </AnimatePresence>
+);
 
 export default ThreatReportModal;
