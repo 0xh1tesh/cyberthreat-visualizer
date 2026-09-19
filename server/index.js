@@ -1,7 +1,12 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const net = require('net');
+const fs = require('fs');
+const path = require('path');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -19,12 +24,12 @@ const ABUSE_KEY = readApiKey('ABUSEIPDB_API_KEY');
 const IPINFO_KEY = readApiKey('IPINFO_API_KEY');
 const OTX_KEY = readApiKey('OTX_API_KEY');
 const SHODAN_KEY = readApiKey('SHODAN_API_KEY');
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const AI_PROVIDER = process.env.AI_PROVIDER || "auto";
+const GEMINI_API_KEY = readApiKey('GEMINI_API_KEY');
+const OPENAI_API_KEY = readApiKey('OPENAI_API_KEY');
+const AI_PROVIDER = String(process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
 
-const hasGemini = !!GEMINI_API_KEY && !GEMINI_API_KEY.includes("your_");
-const hasOpenAI = !!OPENAI_API_KEY && !OPENAI_API_KEY.includes("your_");
+const hasGemini = !!GEMINI_API_KEY;
+const hasOpenAI = !!OPENAI_API_KEY;
 
 function getActiveProvider() {
   if (AI_PROVIDER === "gemini" && hasGemini) return "gemini";
@@ -42,37 +47,10 @@ const AI_TIMEOUT_MS = clampNumber(process.env.AI_CLASSIFIER_TIMEOUT_MS, 200, 800
 const AI_REPORT_TIMEOUT_MS_RAW = Number(process.env.AI_REPORT_TIMEOUT_MS || 0);
 const AI_REPORT_TIMEOUT_MS = Number.isFinite(AI_REPORT_TIMEOUT_MS_RAW) && AI_REPORT_TIMEOUT_MS_RAW > 0
   ? clampNumber(AI_REPORT_TIMEOUT_MS_RAW, 1000, 120000, 10000)
-  : 0;
+  : 10000;
 const GEMINI_MODEL = (process.env.GEMINI_MODEL || 'gemini-flash-latest').trim();
-const AI_ENV_TOP_N = process.env.AI_TOP_N ?? process.env.AI_TOP_N_THREATS;
-const AI_ENV_MIN_SCORE = process.env.AI_MIN_SCORE ?? process.env.AI_MIN_SCORE_FOR_CALL;
-const AI_ENV_LIVE_SAMPLE_INTERVAL = process.env.AI_LIVE_SAMPLE_INTERVAL_MS ?? process.env.AI_LIVE_SAMPLE_WINDOW_MS;
-const AI_MIN_SCORE = clampNumber(AI_ENV_MIN_SCORE, 0, 100, 40);
-const AI_AMBIGUOUS_SCORE_MIN = clampNumber(process.env.AI_AMBIGUOUS_SCORE_MIN, 30, 70, 35);
-const AI_AMBIGUOUS_SCORE_MAX = clampNumber(process.env.AI_AMBIGUOUS_SCORE_MAX, 35, 85, 55);
-const AI_TOP_N = Math.round(clampNumber(AI_ENV_TOP_N, 1, 10, 3));
-const AI_THROTTLE_MS = clampNumber(process.env.AI_THROTTLE_MS, 100, 1500, 300);
-const AI_CACHE_TTL_MS = clampNumber(process.env.AI_CACHE_TTL_MS, 5 * 60 * 1000, 10 * 60 * 1000, 10 * 60 * 1000);
-const AI_LIVE_SAMPLE_INTERVAL_MS = clampNumber(AI_ENV_LIVE_SAMPLE_INTERVAL, 5000, 10000, 5000);
 
-const ENABLE_ABUSE = !!ABUSE_KEY;
-const ENABLE_IPINFO = !!IPINFO_KEY;
-const ENABLE_OTX = true; // allow keyless
-const ENABLE_SHODAN = !!SHODAN_KEY;
-const AI_PROVIDER_OPTIONS = ['openai', 'gemini', 'auto', 'off'];
-const AI_REPORT_REASON_CODES = {
-  NONE: 'none',
-  NO_PROVIDER: 'no_provider',
-  UPSTREAM_HTTP_ERROR: 'upstream_http_error',
-  THROTTLED: 'throttled',
-  TIMEOUT: 'timeout',
-  NETWORK_ERROR: 'network_error',
-  SCHEMA_MISMATCH: 'schema_mismatch',
-  INTERNAL_ERROR: 'internal_error',
-};
-
-const DEBUG_PROVIDER = false;
-
+// Gemini free-tier guard: never exceed the documented requests-per-minute / per-day limits.
 const geminiRateLimit = {
   minuteRequests: [],
   dayRequests: [],
@@ -82,15 +60,11 @@ const geminiRateLimit = {
 
 function isGeminiRateLimited() {
   const now = Date.now();
-  geminiRateLimit.minuteRequests = geminiRateLimit.minuteRequests.filter(
-    (time) => now - time < 60 * 1000
-  );
-  geminiRateLimit.dayRequests = geminiRateLimit.dayRequests.filter(
-    (time) => now - time < 24 * 60 * 60 * 1000
-  );
+  geminiRateLimit.minuteRequests = geminiRateLimit.minuteRequests.filter((time) => now - time < 60 * 1000);
+  geminiRateLimit.dayRequests = geminiRateLimit.dayRequests.filter((time) => now - time < 24 * 60 * 60 * 1000);
   return (
-    geminiRateLimit.minuteRequests.length >= geminiRateLimit.MAX_RPM ||
-    geminiRateLimit.dayRequests.length >= geminiRateLimit.MAX_RPD
+    geminiRateLimit.minuteRequests.length >= geminiRateLimit.MAX_RPM
+    || geminiRateLimit.dayRequests.length >= geminiRateLimit.MAX_RPD
   );
 }
 
@@ -99,6 +73,137 @@ function recordGeminiRequest() {
   geminiRateLimit.minuteRequests.push(now);
   geminiRateLimit.dayRequests.push(now);
 }
+const ACTIVE_AI_PROVIDER = getActiveProvider();
+const ENABLE_AI_CLASSIFIER = ACTIVE_AI_PROVIDER !== null;
+const AI_CONFIG_MODEL = ACTIVE_AI_PROVIDER === 'openai'
+  ? AI_MODEL
+  : ACTIVE_AI_PROVIDER === 'gemini'
+    ? getGeminiModelName()
+    : 'none';
+
+// ── Startup Diagnostic ──────────────────────────────────────
+console.log('\n[AI CONFIG]');
+console.log(`Provider: ${ACTIVE_AI_PROVIDER || 'none'}`);
+console.log(`Model: ${AI_CONFIG_MODEL}`);
+console.log(`Gemini key present: ${hasGemini}`);
+console.log(`AI enabled: ${ENABLE_AI_CLASSIFIER}`);
+console.log('');
+const AI_ENV_TOP_N = process.env.AI_TOP_N ?? process.env.AI_TOP_N_THREATS;
+const AI_ENV_MIN_SCORE = process.env.AI_MIN_SCORE ?? process.env.AI_MIN_SCORE_FOR_CALL;
+const AI_MIN_SCORE = clampNumber(AI_ENV_MIN_SCORE, 0, 100, 40);
+const AI_AMBIGUOUS_SCORE_MIN = clampNumber(process.env.AI_AMBIGUOUS_SCORE_MIN, 30, 70, 35);
+const AI_AMBIGUOUS_SCORE_MAX = clampNumber(process.env.AI_AMBIGUOUS_SCORE_MAX, 35, 85, 55);
+const AI_TOP_N = Math.round(clampNumber(AI_ENV_TOP_N, 1, 10, 3));
+const AI_THROTTLE_MS = clampNumber(process.env.AI_THROTTLE_MS, 100, 1500, 300);
+const AI_CACHE_TTL_MS = clampNumber(process.env.AI_CACHE_TTL_MS, 5 * 60 * 1000, 10 * 60 * 1000, 10 * 60 * 1000);
+
+const ENABLE_ABUSE = !!ABUSE_KEY;
+const ENABLE_IPINFO = !!IPINFO_KEY;
+const ENABLE_OTX = true; // allow keyless
+const ENABLE_SHODAN = !!SHODAN_KEY;
+const AI_PROVIDER_OPTIONS = ['openai', 'gemini', 'auto', 'off'];
+const AI_REPORT_REASON_CODES = {
+  NONE: 'none',
+  NO_PROVIDER: 'no_provider',
+  INVALID_MODEL: 'invalid_model',
+  UPSTREAM_HTTP_ERROR: 'upstream_http_error',
+  THROTTLED: 'throttled',
+  TIMEOUT: 'timeout',
+  NETWORK_ERROR: 'network_error',
+  SCHEMA_MISMATCH: 'schema_mismatch',
+  INTERNAL_ERROR: 'internal_error',
+};
+
+const SOURCE_STATUS_OK = 'ok';
+const SOURCE_STATUS_FAILED = 'failed';
+const SOURCE_STATUS_RATE_LIMITED = 'rate_limited';
+const SOURCE_STATUS_UNAUTHORIZED = 'unauthorized';
+const SOURCE_STATUS_VALUES = new Set([
+  SOURCE_STATUS_OK,
+  SOURCE_STATUS_FAILED,
+  SOURCE_STATUS_RATE_LIMITED,
+  SOURCE_STATUS_UNAUTHORIZED,
+]);
+
+const PROVIDER_STATUS = {
+  abuseipdb: ENABLE_ABUSE ? SOURCE_STATUS_OK : 'missing_key',
+  otx: ENABLE_OTX ? (OTX_KEY ? SOURCE_STATUS_OK : 'public') : 'disabled',
+  shodan: ENABLE_SHODAN ? SOURCE_STATUS_OK : 'missing_key',
+  ipinfo: ENABLE_IPINFO ? SOURCE_STATUS_OK : 'missing_key',
+};
+
+const PROVIDER_STATUS_UPDATED_AT = {
+  abuseipdb: null,
+  otx: null,
+  shodan: null,
+  ipinfo: null,
+};
+
+const PROVIDER_OUTAGE_GRACE_MS = 5 * 60 * 1000;
+const PROVIDER_LAST_OK_AT = { abuseipdb: 0, otx: 0, shodan: 0, ipinfo: 0 };
+
+function setProviderStatus(provider, status) {
+  if (!provider || !Object.prototype.hasOwnProperty.call(PROVIDER_STATUS, provider)) return;
+  const current = PROVIDER_STATUS[provider];
+  if (current === 'missing_key' || current === 'disabled') return;
+  if (status === SOURCE_STATUS_OK) PROVIDER_LAST_OK_AT[provider] = Date.now();
+  // Concurrent per-IP lookups report independently; a lone failure must not mask recent successes.
+  if (status === SOURCE_STATUS_FAILED && Date.now() - PROVIDER_LAST_OK_AT[provider] < PROVIDER_OUTAGE_GRACE_MS) return;
+  if (current === status) return;
+  PROVIDER_STATUS[provider] = status;
+  PROVIDER_STATUS_UPDATED_AT[provider] = Date.now();
+}
+
+function getProviderStatus(provider) {
+  if (!provider || !Object.prototype.hasOwnProperty.call(PROVIDER_STATUS, provider)) return 'unknown';
+  return PROVIDER_STATUS[provider] || 'unknown';
+}
+
+function getProviderHealthLabel(provider) {
+  const status = getProviderStatus(provider);
+  if (status === SOURCE_STATUS_RATE_LIMITED) return 'rate_limited';
+  if (status === SOURCE_STATUS_UNAUTHORIZED) return 'unauthorized';
+  if (status === SOURCE_STATUS_FAILED) return 'offline';
+  if (status === 'missing_key') return 'missing_key';
+  if (status === 'disabled') return 'disabled';
+  if (status === 'public') return 'enabled_public';
+  return 'enabled';
+}
+
+function getProviderBaselineSourceStatus(provider) {
+  const status = getProviderStatus(provider);
+  if (status === SOURCE_STATUS_RATE_LIMITED) return SOURCE_STATUS_RATE_LIMITED;
+  if (status === SOURCE_STATUS_UNAUTHORIZED) return SOURCE_STATUS_UNAUTHORIZED;
+  return SOURCE_STATUS_FAILED;
+}
+
+const AI_ERROR_CODES = {
+  INVALID_MODEL: 'invalid_model',
+  TIMEOUT: 'timeout',
+  THROTTLED: 'throttled',
+  UPSTREAM_HTTP_ERROR: 'upstream_http_error',
+  NETWORK_ERROR: 'network_error',
+  NO_PROVIDER: 'no_provider',
+};
+
+const AI_ERROR_LABELS = {
+  [AI_ERROR_CODES.INVALID_MODEL]: 'Invalid model',
+  [AI_ERROR_CODES.TIMEOUT]: 'AI timeout',
+  [AI_ERROR_CODES.THROTTLED]: 'AI throttled',
+  [AI_ERROR_CODES.UPSTREAM_HTTP_ERROR]: 'AI upstream error',
+  [AI_ERROR_CODES.NETWORK_ERROR]: 'AI network error',
+  [AI_ERROR_CODES.NO_PROVIDER]: 'No AI provider available',
+};
+
+function buildAiError(code, detail = null, provider = null) {
+  return {
+    code,
+    reason: AI_ERROR_LABELS[code] || 'AI error',
+    detail: detail ? String(detail).trim() : null,
+    provider,
+  };
+}
+
 
 function normalizeAiProviderMode(value) {
   const normalized = String(value || '').trim().toLowerCase();
@@ -118,7 +223,7 @@ function resolveAiProviderFromMode(mode) {
 }
 
 function resolveDefaultAiProviderMode() {
-  return normalizeAiProviderMode(process.env.AI_PROVIDER) || normalizeAiProviderMode(AI_PROVIDER) || 'auto';
+  return normalizeAiProviderMode(AI_PROVIDER) || 'auto';
 }
 
 function resolveRequestAiSelection(req) {
@@ -128,11 +233,16 @@ function resolveRequestAiSelection(req) {
   const requestedMode = headerMode || queryMode || bodyMode;
   const mode = requestedMode || resolveDefaultAiProviderMode();
 
-  const headerThreshold = Number(req?.get('X-AI-Threshold'));
-  const queryThreshold = Number(req?.query?.threshold);
-  const bodyThreshold = Number(req?.body?.threshold);
-  const rawThreshold = headerThreshold || queryThreshold || bodyThreshold;
-  const threshold = Number.isFinite(rawThreshold) ? Math.max(0, Math.min(100, rawThreshold)) : 70;
+  const thresholdCandidates = [req?.get('X-AI-Threshold'), req?.query?.threshold, req?.body?.threshold];
+  let threshold = 70;
+  for (const candidate of thresholdCandidates) {
+    if (candidate === undefined || candidate === null || candidate === '') continue;
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed)) {
+      threshold = Math.max(0, Math.min(100, parsed));
+      break;
+    }
+  }
 
   return {
     mode,
@@ -143,43 +253,41 @@ function resolveRequestAiSelection(req) {
 }
 
 function getAiProviderCacheKey(mode) {
-  return normalizeAiProviderMode(mode) || 'off';
+  return resolveAiProviderFromMode(normalizeAiProviderMode(mode)) || 'off';
 }
 
-const ACTIVE_AI_PROVIDER = getActiveProvider();
-const ENABLE_AI_CLASSIFIER = ACTIVE_AI_PROVIDER !== null;
 
 
 
-console.log("Providers:");
-console.log("AbuseIPDB:", ENABLE_ABUSE ? "ON" : "OFF");
-console.log("IPinfo:", ENABLE_IPINFO ? "ON" : "OFF");
-console.log("OTX:", OTX_KEY ? "ON (key)" : "ON (public)");
-console.log("Shodan:", ENABLE_SHODAN ? "ON" : "OFF");
-console.log("AI Classifier:", ENABLE_AI_CLASSIFIER ? "ON" : "OFF");
-console.log("AI Provider:", getActiveProvider());
-console.log("Gemini Key Exists:", hasGemini);
-console.log("AI ENABLED:", ENABLE_AI_CLASSIFIER);
+const CORS_ORIGINS = String(process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
-// CORS — only allow the frontend origin
-app.use(cors({ origin: true }));
-app.use(express.json());
+app.disable('x-powered-by');
+app.use(helmet());
+app.use(cors({ origin: CORS_ORIGINS }));
+app.use(express.json({ limit: '16kb' }));
+
+const aiRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.AI_RATE_LIMIT_PER_MIN) || 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many AI requests. Please slow down.' },
+});
 
 const CACHE_TTL_MS = 60 * 1000;
 const REQUEST_TIMEOUT_MS = 4500;
 const ABUSE_DAILY_SAFE_THRESHOLD = 4;
-const MIN_ATTACKS = 5;
 const MAX_ATTACKS = 10;
 
-let cache = {
-  data: [],
-  timestamp: 0,
-  aiProviderKey: 'off',
-};
+const THREAT_CACHE_MAX = 20;
+const threatCache = new Map();
+let latestThreatCacheAt = 0;
 
 const aiCache = new Map();
 let lastAiCallTime = 0;
-let lastLiveAiWindowAt = 0;
 
 const aiMetrics = {
   totalCalls: 0,
@@ -214,7 +322,7 @@ function snapshotAiMetrics() {
 
 const inFlightFetchPromises = new Map();
 
-let usage = {
+let usage = loadPersistedUsage() || {
   dayKey: getDayKey(),
   abuseipdb: 0,
   otx: 0,
@@ -224,21 +332,6 @@ let usage = {
 
 const warnedKeys = new Set();
 
-// ── Hardcoded target coordinates ─────────────────────────────
-const TARGET_POOL = [
-  { country: 'United States', lat: 38.9072, lng: -77.0369 },
-  { country: 'United Kingdom', lat: 51.5074, lng: -0.1278 },
-  { country: 'Germany', lat: 52.52, lng: 13.405 },
-  { country: 'France', lat: 48.8566, lng: 2.3522 },
-  { country: 'Japan', lat: 35.6895, lng: 139.6917 },
-  { country: 'Australia', lat: -33.8688, lng: 151.2093 },
-  { country: 'Canada', lat: 43.6532, lng: -79.3832 },
-  { country: 'India', lat: 28.6139, lng: 77.209 },
-  { country: 'Brazil', lat: -23.5505, lng: -46.6333 },
-  { country: 'South Korea', lat: 37.5665, lng: 126.978 },
-  { country: 'Netherlands', lat: 52.3676, lng: 4.9041 },
-  { country: 'Singapore', lat: 1.3521, lng: 103.8198 },
-];
 
 const COLOR_MAP = {
   DDoS: '#ff4757',
@@ -333,6 +426,34 @@ function getDayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
+const USAGE_FILE = path.join(__dirname, '.usage.json');
+
+function loadPersistedUsage() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
+    if (parsed && parsed.dayKey === getDayKey()) {
+      return {
+        dayKey: parsed.dayKey,
+        abuseipdb: Number(parsed.abuseipdb) || 0,
+        otx: Number(parsed.otx) || 0,
+        shodan: Number(parsed.shodan) || 0,
+        ipinfo: Number(parsed.ipinfo) || 0,
+      };
+    }
+  } catch {
+    // no persisted usage yet
+  }
+  return null;
+}
+
+function persistUsage() {
+  try {
+    fs.writeFileSync(USAGE_FILE, JSON.stringify(usage));
+  } catch (err) {
+    console.warn('[Usage] could not persist counters:', err.code || err.message);
+  }
+}
+
 function resetUsageIfNeeded() {
   const today = getDayKey();
   if (usage.dayKey !== today) {
@@ -343,6 +464,7 @@ function resetUsageIfNeeded() {
       shodan: 0,
       ipinfo: 0,
     };
+    persistUsage();
   }
 }
 
@@ -350,6 +472,7 @@ function incrementUsage(provider) {
   resetUsageIfNeeded();
   if (Object.prototype.hasOwnProperty.call(usage, provider)) {
     usage[provider] += 1;
+    persistUsage();
   }
 }
 
@@ -369,8 +492,9 @@ const PROVIDER_FAILURE_CATEGORIES = {
 };
 
 function isProviderTimeoutError(err) {
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError' || err?.code === 'ETIMEDOUT') return true;
   const message = String(err?.message || '').toLowerCase();
-  return message.includes('timed out') || message.includes('timeout');
+  return message.includes('timed out');
 }
 
 function getProviderHttpFailureCategory(statusCode) {
@@ -383,6 +507,14 @@ function getProviderErrorCategory(err) {
   return isProviderTimeoutError(err)
     ? PROVIDER_FAILURE_CATEGORIES.TIMEOUT
     : PROVIDER_FAILURE_CATEGORIES.NETWORK_ERROR;
+}
+
+function scrubSecrets(text) {
+  let out = String(text || '');
+  for (const secret of [ABUSE_KEY, IPINFO_KEY, OTX_KEY, SHODAN_KEY, GEMINI_API_KEY, OPENAI_API_KEY]) {
+    if (secret) out = out.split(secret).join('[redacted]');
+  }
+  return out.replace(/([?&](?:key|token)=)[^&\s]+/gi, '$1[redacted]');
 }
 
 function logProviderFailure(
@@ -409,49 +541,75 @@ function logProviderFailure(
     parts.push(`reason=${String(reason)}`);
   }
   if (details) {
-    parts.push(`details=${truncateForLog(details, 140)}`);
+    parts.push(`details=${truncateForLog(scrubSecrets(details), 140)}`);
   }
 
   console.warn(parts.join(' | '));
 }
 
-function isCacheFresh(aiProviderKey, now = Date.now()) {
-  return (
-    cache.aiProviderKey === aiProviderKey &&
-    Array.isArray(cache.data) &&
-    cache.data.length > 0 &&
-    (now - cache.timestamp) < CACHE_TTL_MS
-  );
+function getThreatCacheKey(mode, threshold) {
+  return `${getAiProviderCacheKey(mode)}|${Math.round(clampNumber(threshold, 0, 100, 70))}`;
+}
+
+function peekThreatCache(key) {
+  return threatCache.get(key) || null;
+}
+
+function readThreatCache(key, now = Date.now()) {
+  const entry = threatCache.get(key);
+  if (!entry || (now - entry.timestamp) >= CACHE_TTL_MS) return null;
+  return entry;
+}
+
+function writeThreatCache(key, entry) {
+  threatCache.delete(key);
+  threatCache.set(key, entry);
+  latestThreatCacheAt = entry.timestamp;
+  while (threatCache.size > THREAT_CACHE_MAX) {
+    threatCache.delete(threatCache.keys().next().value);
+  }
 }
 
 function isPrivateOrBogon(ip) {
   if (!ip || typeof ip !== 'string') return true;
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p))) return true;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
+  const version = net.isIP(ip);
+  if (version === 0) return true;
+
+  if (version === 4) {
+    const [a, b, c] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a === 198 && b === 51 && c === 100) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  const lower = ip.toLowerCase();
+  if (lower === '::' || lower === '::1') return true;
+  if (lower.startsWith('::ffff:')) return true;
+  if (/^f[cd]/.test(lower)) return true;
+  if (/^fe[89ab]/.test(lower)) return true;
+  if (lower.startsWith('ff')) return true;
+  if (lower.startsWith('2001:db8')) return true;
   return false;
 }
 
-function shuffle(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+async function fetchWithTimeout(url, options = {}, timeoutMs = 4000, usageProvider = null) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (usageProvider && response.ok) incrementUsage(usageProvider);
+    return response;
+  } finally {
+    clearTimeout(timer);
   }
-  return a;
-}
-
-function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
-  return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out')), timeoutMs)
-    ),
-  ]);
 }
 
 function fetchWithOptionalTimeout(url, options = {}, timeoutMs = 0) {
@@ -477,6 +635,13 @@ function toNonNegativeNumber(value) {
 function normalizePortExposureScore(portExposure) {
   return clampNumber(toNonNegativeNumber(portExposure) * 10, 0, 100, 0);
 }
+
+const CLASSIFICATION_SCORE_BANDS = {
+  [THREAT_CLASSIFICATION.DDOS]: { min: 75, max: 100 },
+  [THREAT_CLASSIFICATION.MALWARE]: { min: 50, max: 74.99 },
+  [THREAT_CLASSIFICATION.SCAN]: { min: 30, max: 49.99 },
+  [THREAT_CLASSIFICATION.LOW]: { min: 0, max: 29.99 },
+};
 
 function classifyFromScore(score) {
   const safeScore = clampNumber(score, 0, 100, 0);
@@ -516,7 +681,7 @@ function isSignalPresent(value) {
 function normalizeSourceStatus(sourceStatus = {}, signals = {}) {
   const normalizeStatus = (value) => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'ok' || normalized === 'failed') return normalized;
+    if (SOURCE_STATUS_VALUES.has(normalized)) return normalized;
     return null;
   };
 
@@ -627,8 +792,15 @@ function parseAiJson(content) {
   }
 }
 
+function safeErrorDetail(err) {
+  if (isProviderTimeoutError(err)) return 'timeout';
+  const code = err?.cause?.code || err?.code;
+  if (code && /^[A-Z_]{3,32}$/.test(String(code))) return String(code);
+  return 'request_failed';
+}
+
 function truncateForLog(value, maxLength = 180) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = scrubSecrets(value).replace(/\s+/g, ' ').trim();
   if (!text) return '';
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
@@ -667,6 +839,9 @@ function buildAiCacheKey(kind, payload = {}) {
   return `${String(kind || 'generic')}|${ip}|${buildSignalHash(signalShape)}`;
 }
 
+const AI_CACHE_MAX_ENTRIES = 1000;
+const AI_FAILURE_CACHE_TTL_MS = 30 * 1000;
+
 function pruneAiCache(now = Date.now()) {
   for (const [key, entry] of aiCache.entries()) {
     if (!entry || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
@@ -675,25 +850,27 @@ function pruneAiCache(now = Date.now()) {
   }
 }
 
+setInterval(() => pruneAiCache(Date.now()), 60 * 1000).unref();
+
 function readAiCache(cacheKey) {
-  const now = Date.now();
-  pruneAiCache(now);
   const entry = aiCache.get(cacheKey);
   if (!entry) return null;
-  if (!Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
+  if (!Number.isFinite(entry.expiresAt) || entry.expiresAt <= Date.now()) {
     aiCache.delete(cacheKey);
     return null;
   }
+  // Re-insert so Map iteration order tracks recency (LRU).
+  aiCache.delete(cacheKey);
+  aiCache.set(cacheKey, entry);
   return entry.value;
 }
 
-function writeAiCache(cacheKey, value) {
-  const now = Date.now();
-  pruneAiCache(now);
-  aiCache.set(cacheKey, {
-    value,
-    expiresAt: now + AI_CACHE_TTL_MS,
-  });
+function writeAiCache(cacheKey, value, ttlMs = AI_CACHE_TTL_MS) {
+  aiCache.delete(cacheKey);
+  aiCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+  while (aiCache.size > AI_CACHE_MAX_ENTRIES) {
+    aiCache.delete(aiCache.keys().next().value);
+  }
 }
 
 function isScanMalwareAmbiguous(score, classification) {
@@ -722,15 +899,6 @@ function shouldAttemptAiForThreat(ruleThreat, explicitRequest = false) {
   }
 
   return { shouldCall: false, reason: 'low score' };
-}
-
-function consumeLiveAiSamplingWindow() {
-  const now = Date.now();
-  if (now - lastLiveAiWindowAt < AI_LIVE_SAMPLE_INTERVAL_MS) {
-    return false;
-  }
-  lastLiveAiWindowAt = now;
-  return true;
 }
 
 function isAiThrottled(now = Date.now()) {
@@ -776,7 +944,6 @@ async function classifyThreatWithAI(normalizedThreat, mode) {
 
   const requestPayload = {
     sourceCountry: normalizedThreat.sourceCountry,
-    targetCountry: normalizedThreat.targetCountry,
     provider: normalizedThreat.provider,
     sourceIp: normalizedThreat.sourceIp,
     score: normalizedThreat.score,
@@ -784,19 +951,25 @@ async function classifyThreatWithAI(normalizedThreat, mode) {
     signals: normalizedThreat.signals,
   };
 
+  let lastError = null;
   for (let i = 0; i < attemptedProviders.length; i += 1) {
     const provider = attemptedProviders[i];
-    const result = provider === 'openai'
+    const outcome = provider === 'openai'
       ? await classifyWithOpenAI(requestPayload)
       : await classifyWithGemini(requestPayload);
 
-    if (result) {
+    if (outcome?.result) {
       return {
-        result,
+        result: outcome.result,
         providerUsed: provider,
         fallback: i > 0,
         attemptedProviders,
+        error: null,
       };
+    }
+
+    if (outcome?.error) {
+      lastError = outcome.error;
     }
   }
 
@@ -805,6 +978,7 @@ async function classifyThreatWithAI(normalizedThreat, mode) {
     providerUsed: 'none',
     fallback: attemptedProviders.length > 1,
     attemptedProviders,
+    error: lastError,
   };
 }
 
@@ -820,7 +994,9 @@ function normalizeAiResponse(parsed) {
 }
 
 async function classifyWithOpenAI(data) {
-  if (!OPENAI_API_KEY) return null;
+  if (!OPENAI_API_KEY) {
+    return { result: null, error: buildAiError(AI_ERROR_CODES.NO_PROVIDER, 'OPENAI_API_KEY missing', 'openai') };
+  }
 
   const body = {
     model: AI_MODEL,
@@ -852,23 +1028,33 @@ async function classifyWithOpenAI(data) {
       },
       AI_TIMEOUT_MS
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (response.status === 429) {
+        return { result: null, error: buildAiError(AI_ERROR_CODES.THROTTLED, 'openai_rate_limited', 'openai') };
+      }
+      return { result: null, error: buildAiError(AI_ERROR_CODES.UPSTREAM_HTTP_ERROR, `openai_http_${response.status}`, 'openai') };
+    }
 
     const json = await response.json();
     const content = json?.choices?.[0]?.message?.content;
     const parsed = parseAiJson(content);
-    return normalizeAiResponse(parsed);
-  } catch {
-    return null;
+    return { result: normalizeAiResponse(parsed), error: null };
+  } catch (err) {
+    return {
+      result: null,
+      error: buildAiError(
+        isAiTimeoutError(err) ? AI_ERROR_CODES.TIMEOUT : AI_ERROR_CODES.NETWORK_ERROR,
+        safeErrorDetail(err),
+        'openai'
+      ),
+    };
   }
 }
 
 async function classifyWithGemini(data) {
-  if (!GEMINI_API_KEY) return null;
-
-  if (isGeminiRateLimited()) {
-    console.warn('[Gemini] Rate limit guard: skipping call — RPM or RPD limit reached');
-    return null;
+  if (!GEMINI_API_KEY) {
+    console.warn('[Gemini Classify] No GEMINI_API_KEY — skipping');
+    return { result: null, error: buildAiError(AI_ERROR_CODES.NO_PROVIDER, 'GEMINI_API_KEY missing', 'gemini') };
   }
 
   const PROMPT_STRING = `You classify cyber threats. Return strict JSON object only with keys: type, confidence, reason. type must be one of DDOS, MALWARE, SCAN, LOW. confidence must be number 0-100. Keep reason short.\n\n${JSON.stringify(data)}`;
@@ -876,50 +1062,88 @@ async function classifyWithGemini(data) {
   const body = {
     contents: [
       {
-        role: 'user',
         parts: [{ text: PROMPT_STRING }]
       }
     ]
   };
 
+  const model = getGeminiModelName();
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  if (isGeminiRateLimited()) {
+    console.warn('[Gemini Classify] Local rate-limit guard: RPM or RPD limit reached, skipping call');
+    return { result: null, error: buildAiError(AI_ERROR_CODES.THROTTLED, 'gemini_local_rate_limit', 'gemini') };
+  }
+  recordGeminiRequest();
+  console.log(`[Gemini Classify] Model: ${model} | Timeout: ${AI_TIMEOUT_MS}ms | IP: ${data?.sourceIp || 'N/A'}`);
+
   try {
-    recordGeminiRequest();
     const response = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${GEMINI_API_KEY}`,
+      endpoint,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': GEMINI_API_KEY,
         },
         body: JSON.stringify(body),
       },
       AI_TIMEOUT_MS
     );
-    
+
+    console.log(`[Gemini Classify] HTTP ${response.status}`);
+
     if (!response.ok) {
-      if (response.status === 429) {
-        console.warn('Gemini rate limit hit');
-      } else {
-        console.warn(`Gemini API Error: HTTP ${response.status}`);
+      const errorText = await readResponseTextSafe(response);
+      if (response.status === 404) {
+        console.warn(`[Gemini Classify] Invalid model (HTTP 404): ${model}`);
+        return { result: null, error: buildAiError(AI_ERROR_CODES.INVALID_MODEL, `gemini_http_404_${model}`, 'gemini') };
       }
-      return null;
+      if (response.status === 429) {
+        console.warn('[Gemini Classify] Rate limit hit (429)');
+        return { result: null, error: buildAiError(AI_ERROR_CODES.THROTTLED, 'gemini_rate_limited', 'gemini') };
+      }
+      console.warn(`[Gemini Classify] API Error: HTTP ${response.status}: ${truncateForLog(errorText, 200)}`);
+      return { result: null, error: buildAiError(AI_ERROR_CODES.UPSTREAM_HTTP_ERROR, `gemini_http_${response.status}`, 'gemini') };
     }
 
     const json = await response.json();
-    if (!json.candidates || !json.candidates[0]?.content?.parts?.length) return null;
-    
+    if (!json.candidates || !json.candidates[0]?.content?.parts?.length) {
+      console.warn('[Gemini Classify] No candidates in response');
+      return { result: null, error: buildAiError(AI_ERROR_CODES.UPSTREAM_HTTP_ERROR, 'gemini_no_candidates', 'gemini') };
+    }
+
     const text = json.candidates[0].content.parts[0].text;
+    console.log(`[Gemini Classify] Raw response (${text.length} chars): ${truncateForLog(text, 200)}`);
+
     let parsed;
     try {
       parsed = JSON.parse(text.replace(/```json/gi, '').replace(/```/g, '').trim());
     } catch {
-      return null;
+      console.warn('[Gemini Classify] JSON parse failed, attempting brace extraction');
+      parsed = parseAiJson(text);
+      if (!parsed) {
+        console.warn('[Gemini Classify] All parse attempts failed');
+        return { result: null, error: buildAiError(AI_ERROR_CODES.UPSTREAM_HTTP_ERROR, 'gemini_parse_failed', 'gemini') };
+      }
     }
-    
-    return normalizeAiResponse(parsed);
+
+    const normalized = normalizeAiResponse(parsed);
+    if (normalized) {
+      console.log(`[Gemini Classify] Result: type=${normalized.type} confidence=${normalized.confidence}`);
+    } else {
+      console.warn('[Gemini Classify] normalizeAiResponse returned null');
+    }
+    return { result: normalized, error: null };
   } catch (err) {
-    console.warn('Gemini fetch error:', err.message);
-    return null;
+    console.warn(`[Gemini Classify] Fetch error: ${err.message}`);
+    return {
+      result: null,
+      error: buildAiError(
+        isAiTimeoutError(err) ? AI_ERROR_CODES.TIMEOUT : AI_ERROR_CODES.NETWORK_ERROR,
+        safeErrorDetail(err),
+        'gemini'
+      ),
+    };
   }
 }
 
@@ -968,7 +1192,6 @@ function normalizeAiReportRiskLevel(value) {
 
 function buildAiReportSummaryFallbacks(payload) {
   const sourceCountry = String(payload?.sourceCountry || 'Unknown source');
-  const targetCountry = String(payload?.targetCountry || 'Unknown target');
   const classification = String(payload?.classification || 'LOW').toUpperCase();
   const score = Number.isFinite(payload?.score) ? Number(payload.score).toFixed(1) : '0.0';
   const abuseScore = Number.isFinite(payload?.abuseConfidenceScore) ? Number(payload.abuseConfidenceScore).toFixed(0) : '0';
@@ -976,7 +1199,7 @@ function buildAiReportSummaryFallbacks(payload) {
   const openPorts = Number.isFinite(payload?.openPorts) ? Number(payload.openPorts).toFixed(0) : '0';
 
   return {
-    executive_summary: `Potential ${classification} activity detected from ${sourceCountry} targeting ${targetCountry} (score ${score}).`,
+    executive_summary: `Potential ${classification} activity detected from ${sourceCountry} (score ${score}).`,
     technical_analysis: `Signal snapshot: abuseScore=${abuseScore}, otxHits=${otxHits}, openPorts=${openPorts}. Review report indicators for analyst confirmation.`,
     recommended_action: 'Block or rate-limit suspicious sources, monitor related indicators, and audit exposed services for immediate hardening.',
   };
@@ -1085,45 +1308,50 @@ function isAiTimeoutError(err) {
   return message.includes('timed out') || message.includes('timeout');
 }
 
+function sanitizeIpInput(value) {
+  const text = String(value || '').trim();
+  return net.isIP(text) ? text : '';
+}
+
+function sanitizeCountryInput(value) {
+  return String(value || '')
+    .replace(/[^\p{L}\p{M}\s.,'()-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 64);
+}
+
+function sanitizeClassificationInput(value) {
+  const text = String(value || '').trim().toUpperCase();
+  return Object.values(THREAT_CLASSIFICATION).includes(text) ? text : 'LOW';
+}
+
+function sanitizeCount(value, max = 1000000) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.min(numeric, max);
+}
+
 function buildReportThreatPayload(threat) {
-  const abuseConfidenceScore = typeof threat?.signals?.abuseScore === 'number'
-    ? threat.signals.abuseScore
-    : 0;
-  const otxHits = typeof threat?.signals?.otxHits === 'number'
-    ? threat.signals.otxHits
-    : 0;
-  const openPorts = typeof threat?.signals?.portExposure === 'number'
-    ? threat.signals.portExposure
-    : 0;
+  const abuseConfidenceScore = clampNumber(threat?.signals?.abuseScore, 0, 100, 0);
+  const otxHits = sanitizeCount(threat?.signals?.otxHits);
+  const openPorts = sanitizeCount(threat?.signals?.portExposure);
 
   return {
-    ip: String(threat?.sourceIp || threat?.ip || ''),
-    sourceCountry: String(threat?.sourceCountry || ''),
-    targetCountry: String(threat?.targetCountry || ''),
+    ip: sanitizeIpInput(threat?.sourceIp || threat?.ip),
+    sourceCountry: sanitizeCountryInput(threat?.sourceCountry),
     abuseConfidenceScore,
     otxHits,
     openPorts,
-    classification: String(threat?.classification || 'LOW'),
-    score: Number.isFinite(threat?.score) ? threat.score : 0,
+    classification: sanitizeClassificationInput(threat?.classification),
+    score: clampNumber(threat?.score, 0, 100, 0),
   };
 }
 
-function resolveGeminiReportModel() {
-  const configured = String(AI_MODEL || '').trim();
-  if (configured && configured.toLowerCase().includes('gemini')) {
-    return configured;
-  }
+function getGeminiModelName() {
+  const configured = String(process.env.GEMINI_MODEL || '').trim();
+  if (configured) return configured;
   return GEMINI_MODEL;
-}
-
-function resolveGeminiReportModelCandidates() {
-  const primary = resolveGeminiReportModel();
-  const candidates = [
-    primary,
-    GEMINI_MODEL,
-    'gemini-1.5-flash',
-  ].filter(Boolean);
-  return [...new Set(candidates)];
 }
 
 function buildGeminiReportRequestBodies(payload) {
@@ -1212,7 +1440,7 @@ async function generateReportSummaryWithOpenAI(payload) {
       reasonCode: isAiTimeoutError(err)
         ? AI_REPORT_REASON_CODES.TIMEOUT
         : AI_REPORT_REASON_CODES.NETWORK_ERROR,
-      reasonDetail: truncateForLog(err.message),
+      reasonDetail: safeErrorDetail(err),
       provider: 'openai',
     });
   }
@@ -1228,73 +1456,83 @@ async function generateReportSummaryWithGemini(payload) {
   }
 
   const requestBodies = buildGeminiReportRequestBodies(payload);
+  const model = getGeminiModelName();
 
   try {
-    const modelCandidates = resolveGeminiReportModelCandidates();
     let lastFailure = buildAiReportAttemptResult({
       reasonCode: AI_REPORT_REASON_CODES.INTERNAL_ERROR,
       reasonDetail: 'gemini_unknown',
       provider: 'gemini',
     });
 
-    for (let i = 0; i < modelCandidates.length; i += 1) {
-      const model = modelCandidates[i];
-      for (let bodyIndex = 0; bodyIndex < requestBodies.length; bodyIndex += 1) {
-        if (isGeminiRateLimited()) {
-          return emptyAiSummary('rate_limit', 'Gemini rate limit reached', ['gemini']);
-        }
-        recordGeminiRequest();
-        const response = await fetchWithOptionalTimeout(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBodies[bodyIndex]),
+    for (let bodyIndex = 0; bodyIndex < requestBodies.length; bodyIndex += 1) {
+      if (isGeminiRateLimited()) {
+        return buildAiReportAttemptResult({
+          reasonCode: AI_REPORT_REASON_CODES.THROTTLED,
+          reasonDetail: 'gemini_local_rate_limit',
+          provider: 'gemini',
+        });
+      }
+      recordGeminiRequest();
+      const response = await fetchWithOptionalTimeout(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY,
           },
-          AI_REPORT_TIMEOUT_MS
-        );
+          body: JSON.stringify(requestBodies[bodyIndex]),
+        },
+        AI_REPORT_TIMEOUT_MS
+      );
 
-        if (!response.ok) {
-          const errorText = await readResponseTextSafe(response);
-          console.warn(`[AI Report][gemini:${model}:fmt${bodyIndex}] HTTP ${response.status}: ${truncateForLog(errorText)}`);
+      if (!response.ok) {
+        const errorText = await readResponseTextSafe(response);
+        console.warn(`[AI Report][gemini:${model}:fmt${bodyIndex}] HTTP ${response.status}: ${truncateForLog(errorText)}`);
 
-          if (response.status === 401 || response.status === 403 || response.status === 429) {
-            return buildAiReportAttemptResult({
-              reasonCode: AI_REPORT_REASON_CODES.UPSTREAM_HTTP_ERROR,
-              reasonDetail: `gemini_http_${response.status}_${model}_fmt${bodyIndex}`,
-              provider: 'gemini',
-            });
-          }
+        if (response.status === 404) {
+          return buildAiReportAttemptResult({
+            reasonCode: AI_REPORT_REASON_CODES.INVALID_MODEL,
+            reasonDetail: `gemini_http_404_${model}_fmt${bodyIndex}`,
+            provider: 'gemini',
+          });
+        }
 
-          lastFailure = buildAiReportAttemptResult({
+        if (response.status === 401 || response.status === 403 || response.status === 429) {
+          return buildAiReportAttemptResult({
             reasonCode: AI_REPORT_REASON_CODES.UPSTREAM_HTTP_ERROR,
             reasonDetail: `gemini_http_${response.status}_${model}_fmt${bodyIndex}`,
             provider: 'gemini',
           });
-          continue;
         }
 
-        const json = await response.json();
-        const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) continue;
-        const normalized = normalizeAiReportSummaryFromContent(text, payload);
-        if (normalized) {
-          return buildAiReportAttemptResult({
-            summary: normalized,
-            reasonCode: AI_REPORT_REASON_CODES.NONE,
-            provider: 'gemini',
-          });
-        }
-
-        console.warn(`[AI Report][gemini:${model}:fmt${bodyIndex}] Response did not match expected JSON schema`);
         lastFailure = buildAiReportAttemptResult({
-          reasonCode: AI_REPORT_REASON_CODES.SCHEMA_MISMATCH,
-          reasonDetail: `gemini_schema_mismatch_${model}_fmt${bodyIndex}`,
+          reasonCode: AI_REPORT_REASON_CODES.UPSTREAM_HTTP_ERROR,
+          reasonDetail: `gemini_http_${response.status}_${model}_fmt${bodyIndex}`,
+          provider: 'gemini',
+        });
+        continue;
+      }
+
+      const json = await response.json();
+      const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) continue;
+      const normalized = normalizeAiReportSummaryFromContent(text, payload);
+      if (normalized) {
+        return buildAiReportAttemptResult({
+          summary: normalized,
+          reasonCode: AI_REPORT_REASON_CODES.NONE,
           provider: 'gemini',
         });
       }
+
+      console.warn(`[AI Report][gemini:${model}:fmt${bodyIndex}] Response did not match expected JSON schema`);
+      lastFailure = buildAiReportAttemptResult({
+        reasonCode: AI_REPORT_REASON_CODES.SCHEMA_MISMATCH,
+        reasonDetail: `gemini_schema_mismatch_${model}_fmt${bodyIndex}`,
+        provider: 'gemini',
+      });
     }
 
     return lastFailure;
@@ -1304,7 +1542,7 @@ async function generateReportSummaryWithGemini(payload) {
       reasonCode: isAiTimeoutError(err)
         ? AI_REPORT_REASON_CODES.TIMEOUT
         : AI_REPORT_REASON_CODES.NETWORK_ERROR,
-      reasonDetail: truncateForLog(err.message),
+      reasonDetail: safeErrorDetail(err),
       provider: 'gemini',
     });
   }
@@ -1347,7 +1585,7 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
   if (cachedReport) {
     incrementAiMetric('cacheHits');
     incrementAiMetric('skippedCache');
-    console.log('AI skipped: cached');
+    
     return cachedReport;
   }
   incrementAiMetric('cacheMisses');
@@ -1355,7 +1593,7 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
   const now = Date.now();
   if (!explicitRequest && isAiThrottled(now)) {
     incrementAiMetric('skippedThrottle');
-    console.log('AI skipped: throttled');
+    
     const throttledResult = {
       ...buildAiReportAttemptResult({
         reasonCode: AI_REPORT_REASON_CODES.THROTTLED,
@@ -1364,7 +1602,7 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
       }),
       attemptedProviders,
     };
-    writeAiCache(reportCacheKey, throttledResult);
+    writeAiCache(reportCacheKey, throttledResult, AI_FAILURE_CACHE_TTL_MS);
     return throttledResult;
   }
 
@@ -1401,11 +1639,11 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
     const failureResult = {
       ...buildAiReportAttemptResult({
         reasonCode: AI_REPORT_REASON_CODES.INTERNAL_ERROR,
-        reasonDetail: truncateForLog(err.message),
+        reasonDetail: safeErrorDetail(err),
       }),
       attemptedProviders,
     };
-    writeAiCache(reportCacheKey, failureResult);
+    writeAiCache(reportCacheKey, failureResult, AI_FAILURE_CACHE_TTL_MS);
     return failureResult;
   }
 
@@ -1416,7 +1654,7 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
     ...lastFailure,
     attemptedProviders,
   };
-  writeAiCache(reportCacheKey, finalFailure);
+  writeAiCache(reportCacheKey, finalFailure, AI_FAILURE_CACHE_TTL_MS);
   return finalFailure;
 }
 
@@ -1439,7 +1677,6 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
   const {
     eligibleForTopN = true,
     explicitRequest = false,
-    liveSamplingAllowed = true,
   } = options;
 
   const ruleScore = clampNumber(ruleThreat.score, 0, 100, 0);
@@ -1454,6 +1691,7 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
       fallback = true,
       provider = null,
       confidence = null,
+      reasonCode = null,
     } = {}
   ) => ({
     ...ruleThreat,
@@ -1465,6 +1703,7 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
       enabled,
       fallback,
       reason: reasonText,
+      reasonCode,
       filtered: isFiltered,
     },
     signals: {
@@ -1474,8 +1713,11 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
   });
 
   const buildAppliedResult = (aiOutcome, aiResult) => {
-    const finalScore = clampNumber(Number(((0.7 * ruleScore) + (0.3 * aiResult.confidence)).toFixed(2)), 0, 100, 0);
-    const finalClassification = classifyFromScore(finalScore);
+    // The model's verdict decides the class; confidence only gates whether it is applied.
+    // The evidence-based rule score is kept, clamped into the verdict's band so score and class agree.
+    const finalClassification = aiResult.type;
+    const band = CLASSIFICATION_SCORE_BANDS[finalClassification] || CLASSIFICATION_SCORE_BANDS[THREAT_CLASSIFICATION.LOW];
+    const finalScore = clampNumber(ruleScore, band.min, band.max, ruleScore);
     const finalType = mapClassificationToType(finalClassification);
 
     return {
@@ -1489,6 +1731,7 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
         ...(ruleThreat.signals || {}),
         ruleScore,
         aiConfidence: aiResult.confidence,
+        aiVerdict: aiResult.type,
         finalScore,
       },
       ai: {
@@ -1506,32 +1749,20 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
   };
 
   if (!aiEnabled) {
-    return buildFallback('No AI provider available', { enabled: false, fallback: false });
+    return buildFallback('No AI provider available', {
+      enabled: false,
+      fallback: false,
+      reasonCode: AI_ERROR_CODES.NO_PROVIDER,
+    });
   }
 
-  const aiDecision = shouldAttemptAiForThreat(ruleThreat, explicitRequest);
-  if (!aiDecision.shouldCall) {
-    incrementAiMetric('skippedLowScore');
-    console.log('AI skipped: low score');
-    return buildFallback('AI skipped: low score', { enabled: false, fallback: true });
-  }
-
-  if (!eligibleForTopN && !explicitRequest) {
-    console.log(`AI skipped: sampled (outside top ${AI_TOP_N})`);
-    return buildFallback(`Outside top ${AI_TOP_N} by score`, { enabled: false, fallback: true });
-  }
-
-  if (!liveSamplingAllowed && !explicitRequest) {
-    console.log('AI skipped: sampled live window');
-    return buildFallback('Live stream sampling window', { enabled: false, fallback: true });
-  }
-
+  // Cache reads are free, so they come before every cost gate.
   const cacheKey = buildAiCacheKey('classify', ruleThreat);
   const cachedOutcome = readAiCache(cacheKey);
   if (cachedOutcome) {
     incrementAiMetric('cacheHits');
     incrementAiMetric('skippedCache');
-    console.log('AI skipped: cached');
+    
     const cachedResult = cachedOutcome.result;
     if (!cachedResult) {
       return buildFallback('Cached rule-based fallback', {
@@ -1554,24 +1785,40 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
   }
   incrementAiMetric('cacheMisses');
 
+  const aiDecision = shouldAttemptAiForThreat(ruleThreat, explicitRequest);
+  if (!aiDecision.shouldCall) {
+    incrementAiMetric('skippedLowScore');
+    return buildFallback('AI skipped: low score', { enabled: false, fallback: true });
+  }
+
+  if (!eligibleForTopN && !explicitRequest) {
+    return buildFallback(`Outside top ${AI_TOP_N} by score`, { enabled: false, fallback: true });
+  }
+
   const now = Date.now();
   if (!explicitRequest && isAiThrottled(now)) {
     incrementAiMetric('skippedThrottle');
-    console.log('AI skipped: throttled');
-    return buildFallback('AI skipped: throttled', { enabled: true, fallback: true });
+    return buildFallback('AI skipped: throttled', {
+      enabled: true,
+      fallback: true,
+      reasonCode: AI_ERROR_CODES.THROTTLED,
+    });
   }
 
   incrementAiMetric('totalCalls');
   markAiCallStart(now);
   const aiOutcome = await classifyThreatWithAI(ruleThreat, mode);
-  writeAiCache(cacheKey, aiOutcome);
-
   const aiResult = aiOutcome.result;
+  // Failures are cached only briefly so one transient error does not blind an IP for 10 minutes.
+  writeAiCache(cacheKey, aiOutcome, aiResult ? AI_CACHE_TTL_MS : AI_FAILURE_CACHE_TTL_MS);
+
   if (!aiResult) {
     incrementAiMetric('failedCalls');
-    return buildFallback('Rule-based fallback', {
+    const fallbackReason = aiOutcome?.error?.reason || 'Rule-based fallback';
+    return buildFallback(fallbackReason, {
       enabled: aiOutcome.attemptedProviders.length > 0,
       fallback: aiOutcome.fallback,
+      reasonCode: aiOutcome?.error?.code || AI_ERROR_CODES.UPSTREAM_HTTP_ERROR,
     });
   }
 
@@ -1605,9 +1852,12 @@ function normalizeIntensity(score = 50) {
   return Math.min(10, Math.max(1, Math.round((Number(score) || 50) / 10)));
 }
 
-function pickTarget() {
-  return TARGET_POOL[Math.floor(Math.random() * TARGET_POOL.length)];
-}
+// Attack destinations are not observable from the feeds; every arc terminates at one neutral monitoring node.
+const SENSOR_NODE = {
+  country: 'Unattributed',
+  lat: process.env.SENSOR_LAT && Number.isFinite(Number(process.env.SENSOR_LAT)) ? Number(process.env.SENSOR_LAT) : 20,
+  lng: process.env.SENSOR_LNG && Number.isFinite(Number(process.env.SENSOR_LNG)) ? Number(process.env.SENSOR_LNG) : 0,
+};
 
 function getCountryCoords(countryName) {
   return COUNTRY_COORDS[countryName] || null;
@@ -1647,7 +1897,6 @@ async function fetchAbuseBlacklist(ABUSE_KEY) {
   }
 
   try {
-    incrementUsage('abuseipdb');
     const response = await fetchWithTimeout(
       'https://api.abuseipdb.com/api/v2/blacklist?limit=25&confidenceMinimum=65',
       {
@@ -1656,10 +1905,16 @@ async function fetchAbuseBlacklist(ABUSE_KEY) {
           Accept: 'application/json',
         },
       },
-      REQUEST_TIMEOUT_MS
+      REQUEST_TIMEOUT_MS,
+      'abuseipdb'
     );
 
     if (!response.ok) {
+      if (response.status === 429) {
+        setProviderStatus('abuseipdb', SOURCE_STATUS_RATE_LIMITED);
+      } else {
+        setProviderStatus('abuseipdb', SOURCE_STATUS_FAILED);
+      }
       logProviderFailure('abuseipdb', {
         category: getProviderHttpFailureCategory(response.status),
         status: response.status,
@@ -1674,8 +1929,10 @@ async function fetchAbuseBlacklist(ABUSE_KEY) {
 
     const json = await response.json();
     const entries = Array.isArray(json?.data) ? json.data : [];
+    setProviderStatus('abuseipdb', SOURCE_STATUS_OK);
     return { ok: entries.length > 0, reason: entries.length > 0 ? 'ok' : 'empty', entries };
   } catch (err) {
+    setProviderStatus('abuseipdb', SOURCE_STATUS_FAILED);
     logProviderFailure('abuseipdb', {
       category: getProviderErrorCategory(err),
       reason: 'blacklist_fetch_exception',
@@ -1689,7 +1946,6 @@ async function fetchOtxGeneral(OTX_KEY, ipAddress) {
   if (!ipAddress || isPrivateOrBogon(ipAddress)) return null;
 
   try {
-    incrementUsage('otx');
     const headers = {
       Accept: 'application/json',
     };
@@ -1698,10 +1954,16 @@ async function fetchOtxGeneral(OTX_KEY, ipAddress) {
     }
 
     const response = await fetchWithTimeout(
-      `https://otx.alienvault.com/api/v1/indicators/IPv4/${ipAddress}/general`,
+      `https://otx.alienvault.com/api/v1/indicators/${net.isIP(ipAddress) === 6 ? 'IPv6' : 'IPv4'}/${encodeURIComponent(ipAddress)}/general`,
       { headers },
-      REQUEST_TIMEOUT_MS
+      REQUEST_TIMEOUT_MS,
+      'otx'
     );
+
+    if (response.status === 404) {
+      setProviderStatus('otx', SOURCE_STATUS_OK);
+      return null;
+    }
 
     if (!response.ok) {
       logProviderFailure('otx', {
@@ -1710,11 +1972,14 @@ async function fetchOtxGeneral(OTX_KEY, ipAddress) {
         ipAddress,
         reason: 'general_lookup_failed',
       });
+      setProviderStatus('otx', SOURCE_STATUS_FAILED);
       return null;
     }
     const json = await response.json();
+    setProviderStatus('otx', SOURCE_STATUS_OK);
     return json && typeof json === 'object' ? json : null;
   } catch (err) {
+    setProviderStatus('otx', SOURCE_STATUS_FAILED);
     logProviderFailure('otx', {
       category: getProviderErrorCategory(err),
       ipAddress,
@@ -1730,17 +1995,26 @@ async function fetchShodanHost(SHODAN_KEY, ipAddress) {
   if (!ipAddress || isPrivateOrBogon(ipAddress)) return null;
 
   try {
-    incrementUsage('shodan');
     const response = await fetchWithTimeout(
-      `https://api.shodan.io/shodan/host/${ipAddress}?key=${SHODAN_KEY}`,
+      `https://api.shodan.io/shodan/host/${encodeURIComponent(ipAddress)}?key=${encodeURIComponent(SHODAN_KEY)}`,
       {
         headers: {
           Accept: 'application/json',
         },
       },
-      REQUEST_TIMEOUT_MS
+      REQUEST_TIMEOUT_MS,
+      'shodan'
     );
+    if (response.status === 404) {
+      setProviderStatus('shodan', SOURCE_STATUS_OK);
+      return null;
+    }
     if (!response.ok) {
+      if (response.status === 403) {
+        setProviderStatus('shodan', SOURCE_STATUS_UNAUTHORIZED);
+      } else {
+        setProviderStatus('shodan', SOURCE_STATUS_FAILED);
+      }
       logProviderFailure('shodan', {
         category: getProviderHttpFailureCategory(response.status),
         status: response.status,
@@ -1750,8 +2024,10 @@ async function fetchShodanHost(SHODAN_KEY, ipAddress) {
       return null;
     }
     const json = await response.json();
+    setProviderStatus('shodan', SOURCE_STATUS_OK);
     return json && typeof json === 'object' ? json : null;
   } catch (err) {
+    setProviderStatus('shodan', SOURCE_STATUS_FAILED);
     logProviderFailure('shodan', {
       category: getProviderErrorCategory(err),
       ipAddress,
@@ -1768,13 +2044,14 @@ async function fetchIpInfo(IPINFO_KEY, ipAddress) {
   if (!ipAddress || isPrivateOrBogon(ipAddress)) return null;
 
   try {
-    incrementUsage('ipinfo');
     const response = await fetchWithTimeout(
-      `https://ipinfo.io/${ipAddress}/json?token=${IPINFO_KEY}`,
-      {},
-      REQUEST_TIMEOUT_MS
+      `https://ipinfo.io/${encodeURIComponent(ipAddress)}/json`,
+      { headers: { Authorization: `Bearer ${IPINFO_KEY}`, Accept: 'application/json' } },
+      REQUEST_TIMEOUT_MS,
+      'ipinfo'
     );
     if (!response.ok) {
+      setProviderStatus('ipinfo', SOURCE_STATUS_FAILED);
       logProviderFailure('ipinfo', {
         category: getProviderHttpFailureCategory(response.status),
         status: response.status,
@@ -1784,8 +2061,10 @@ async function fetchIpInfo(IPINFO_KEY, ipAddress) {
       return null;
     }
     const json = await response.json();
+    setProviderStatus('ipinfo', SOURCE_STATUS_OK);
     return json && typeof json === 'object' ? json : null;
   } catch (err) {
+    setProviderStatus('ipinfo', SOURCE_STATUS_FAILED);
     logProviderFailure('ipinfo', {
       category: getProviderErrorCategory(err),
       ipAddress,
@@ -1859,7 +2138,7 @@ function normalizeThreatRecord({
   if (!Number.isFinite(geo.sourceLat) || !Number.isFinite(geo.sourceLng)) return null;
   if (!geo.sourceCountry) return null;
 
-  const target = pickTarget();
+  const target = SENSOR_NODE;
   const safeScore = clampNumber(score, 0, 100, 0);
   const resolvedClassification = classifyFromScore(safeScore);
   const resolvedType = type || mapClassificationToType(classification || resolvedClassification);
@@ -1909,7 +2188,7 @@ function normalizeThreatRecord({
     : fallbackSignals;
 
   return {
-    id: `${timestamp}-${ipAddress}`,
+    id: `ip-${ipAddress}`,
     sourceLat: geo.sourceLat,
     sourceLng: geo.sourceLng,
     sourceCountry: geo.sourceCountry,
@@ -1934,18 +2213,84 @@ function normalizeThreatRecord({
 
 // ── Phase 1: Collect candidate IPs from all enabled providers ─────────
 
-async function collectAbuseIps(abuseKey) {
-  if (!ENABLE_ABUSE || usage.abuseipdb >= ABUSE_DAILY_SAFE_THRESHOLD) {
-    return { ips: [], reason: !ENABLE_ABUSE ? 'disabled' : 'daily-threshold' };
+const ABUSE_REFRESH_MS = clampNumber(process.env.ABUSE_REFRESH_MS, 10 * 60 * 1000, 24 * 60 * 60 * 1000, 6 * 60 * 60 * 1000);
+const ENRICHMENT_TTL_MS = 30 * 60 * 1000;
+const ENRICHMENT_CONCURRENCY = 4;
+const MAX_CANDIDATE_IPS = 12;
+const ENRICHMENT_CACHE_MAX = 500;
+
+let abuseBlacklistCache = { entries: [], fetchedAt: 0 };
+let abuseRotationOffset = 0;
+const enrichmentCache = new Map();
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await worker(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function readEnrichmentCache(ip) {
+  const entry = enrichmentCache.get(ip);
+  if (!entry) return null;
+  if (Date.now() - entry.at > ENRICHMENT_TTL_MS) {
+    enrichmentCache.delete(ip);
+    return null;
   }
-  const blacklist = await fetchAbuseBlacklist(abuseKey);
-  if (!blacklist.ok) return { ips: [], reason: blacklist.reason };
+  return entry;
+}
 
-  const candidates = dedupeByIp(blacklist.entries)
+function writeEnrichmentCache(ip, value) {
+  enrichmentCache.delete(ip);
+  enrichmentCache.set(ip, { ...value, at: Date.now() });
+  while (enrichmentCache.size > ENRICHMENT_CACHE_MAX) {
+    enrichmentCache.delete(enrichmentCache.keys().next().value);
+  }
+}
+
+async function collectAbuseIps(abuseKey) {
+  if (!ENABLE_ABUSE) return { ips: [], reason: 'disabled' };
+
+  const cacheFresh = abuseBlacklistCache.entries.length > 0
+    && (Date.now() - abuseBlacklistCache.fetchedAt) < ABUSE_REFRESH_MS;
+  let reason = 'cached';
+
+  if (!cacheFresh) {
+    if (usage.abuseipdb >= ABUSE_DAILY_SAFE_THRESHOLD) {
+      reason = 'daily-threshold';
+    } else {
+      const blacklist = await fetchAbuseBlacklist(abuseKey);
+      if (blacklist.ok) {
+        abuseBlacklistCache = { entries: blacklist.entries, fetchedAt: Date.now() };
+        reason = 'ok';
+      } else {
+        reason = blacklist.reason;
+      }
+    }
+  }
+
+  // Stale data beats hardcoded demo IPs when the provider is exhausted or failing.
+  const pool = dedupeByIp(abuseBlacklistCache.entries)
     .filter((entry) => !isPrivateOrBogon(entry?.ipAddress))
-    .slice(0, 12);
+    .sort((a, b) => Number(b.abuseConfidenceScore || 0) - Number(a.abuseConfidenceScore || 0));
+  if (pool.length === 0) return { ips: [], reason };
 
-  // Build a map of IP → abuse signal
+  // Slide a window over the pool so successive cycles surface different IPs without random discards.
+  const size = Math.min(MAX_CANDIDATE_IPS, pool.length);
+  const candidates = Array.from({ length: size }, (_, i) => pool[(abuseRotationOffset + i) % pool.length]);
+  abuseRotationOffset = (abuseRotationOffset + Math.max(1, Math.floor(size / 3))) % pool.length;
+
   const abuseMap = {};
   for (const entry of candidates) {
     abuseMap[entry.ipAddress] = {
@@ -1953,35 +2298,13 @@ async function collectAbuseIps(abuseKey) {
       countryCode: String(entry.countryCode || '').toUpperCase(),
     };
   }
-  return { ips: candidates.map(e => e.ipAddress), abuseMap, reason: 'ok' };
+  return { ips: candidates.map((e) => e.ipAddress), abuseMap, reason };
 }
 
-function collectOtxCandidateIps(seedIps = []) {
-  if (!ENABLE_OTX) return [];
-  return dedupeByIp(
-    shuffle(
-      [...seedIps, ...OTX_FALLBACK_IPS]
-        .filter((ip) => ip && typeof ip === 'string')
-        .map((ipAddress) => ({ ipAddress }))
-    )
-  )
-    .map((entry) => entry.ipAddress)
-    .filter((ip) => !isPrivateOrBogon(ip))
+function collectFallbackSeedIps() {
+  return OTX_FALLBACK_IPS
+    .filter((ip) => ip && typeof ip === 'string' && !isPrivateOrBogon(ip))
     .slice(0, 8);
-}
-
-function collectShodanCandidateIps(seedIps = []) {
-  if (!ENABLE_SHODAN) return [];
-  return dedupeByIp(
-    shuffle(
-      [...seedIps, ...OTX_FALLBACK_IPS]
-        .filter((ip) => ip && typeof ip === 'string')
-        .map((ipAddress) => ({ ipAddress }))
-    )
-  )
-    .map((entry) => entry.ipAddress)
-    .filter((ip) => !isPrivateOrBogon(ip))
-    .slice(0, 6);
 }
 
 // ── Phase 2: Enrich each IP with all available providers ──────────────
@@ -2009,148 +2332,103 @@ async function enrichIpFromShodan(shodanKey, ipAddress) {
   };
 }
 
+async function enrichIp(ip, abuseEntry) {
+  const cached = readEnrichmentCache(ip);
+  if (cached) return cached;
+
+  const [otxSettled, shodanSettled] = await Promise.allSettled([
+    ENABLE_OTX ? enrichIpFromOtx(OTX_KEY, ip) : Promise.resolve(null),
+    ENABLE_SHODAN ? enrichIpFromShodan(SHODAN_KEY, ip) : Promise.resolve(null),
+  ]);
+  const otx = otxSettled.status === 'fulfilled' ? otxSettled.value : null;
+  const shodan = shodanSettled.status === 'fulfilled' ? shodanSettled.value : null;
+
+  const geoFallback = {};
+  const abuseCode = abuseEntry?.countryCode;
+  if (abuseCode) {
+    geoFallback.countryCode = abuseCode;
+    geoFallback.countryName = toCountryName(abuseCode);
+  }
+  if (otx?.countryCode && !geoFallback.countryCode) {
+    geoFallback.countryCode = otx.countryCode;
+    geoFallback.countryName = toCountryName(otx.countryCode);
+  }
+  if (shodan) {
+    if (!geoFallback.countryCode && shodan.countryCode) {
+      geoFallback.countryCode = shodan.countryCode;
+      geoFallback.countryName = shodan.countryName || toCountryName(shodan.countryCode);
+    }
+    if (Number.isFinite(shodan.lat) && Number.isFinite(shodan.lng)) {
+      geoFallback.lat = shodan.lat;
+      geoFallback.lng = shodan.lng;
+    }
+    geoFallback.city = shodan.city || geoFallback.city;
+    geoFallback.region = shodan.region || geoFallback.region;
+  }
+
+  const geo = await resolveGeo(ip, IPINFO_KEY, geoFallback);
+  const result = { otx, shodan, geo };
+  // Only remember lookups that produced geo so a transient outage is retried on the next cycle.
+  if (geo) writeEnrichmentCache(ip, result);
+  return result;
+}
+
 // ── Phase 3: Unified IP Map → Fusion → Threat Object ─────────────────
 
 async function aggregateThreats(mode, threshold) {
-  // Step 1: Collect all candidate IPs
   const abuseResult = await collectAbuseIps(ABUSE_KEY);
   const abuseMap = abuseResult.abuseMap || {};
-  const abuseIps = abuseResult.ips || [];
+  let allIps = (abuseResult.ips || []).filter((ip) => !isPrivateOrBogon(ip));
 
-  const otxIps = collectOtxCandidateIps(abuseIps);
-  const shodanIps = collectShodanCandidateIps(abuseIps);
-
-  // Build unified IP set (deduplicated)
-  const allIpSet = new Set([...abuseIps, ...otxIps, ...shodanIps]);
-  const allIps = [...allIpSet].filter(ip => !isPrivateOrBogon(ip));
+  let degraded = false;
+  let degradedReason = null;
+  if (allIps.length === 0) {
+    allIps = collectFallbackSeedIps();
+    degraded = true;
+    degradedReason = abuseResult.reason || 'no-abuse-data';
+  }
 
   if (allIps.length === 0) {
-    return { attacks: [], sourcesUsed: [] };
+    return { attacks: [], sourcesUsed: [], degraded: true, degradedReason: degradedReason || 'no-candidates' };
   }
 
-  // Step 2: Build the IP map — enrich each IP with all available providers in parallel
-  const ipMap = {};
-  for (const ip of allIps) {
-    ipMap[ip] = {
-      abuse: abuseMap[ip] || null,  // Already collected from blacklist
-      otx: null,
-      shodan: null,
-      geo: null,
-      sourceStatus: {
-        abuseipdb: abuseMap[ip] ? 'ok' : 'failed',
-        otx: 'failed',
-        shodan: 'failed',
+  const enrichSettled = await mapWithConcurrency(allIps, ENRICHMENT_CONCURRENCY, (ip) => enrichIp(ip, abuseMap[ip]));
+
+  const ruleThreats = [];
+  const sourcesUsedSet = new Set();
+  allIps.forEach((ip, index) => {
+    const settled = enrichSettled[index];
+    const enrichment = settled?.status === 'fulfilled' ? settled.value : { otx: null, shodan: null, geo: null };
+    const abuse = abuseMap[ip] || null;
+    const { otx, shodan, geo } = enrichment;
+
+    const sourceStatus = normalizeSourceStatus(
+      {
+        abuseipdb: abuse ? SOURCE_STATUS_OK : getProviderBaselineSourceStatus('abuseipdb'),
+        otx: otx ? SOURCE_STATUS_OK : getProviderBaselineSourceStatus('otx'),
+        shodan: shodan ? SOURCE_STATUS_OK : getProviderBaselineSourceStatus('shodan'),
       },
-    };
-  }
-
-  // Enrich with OTX and Shodan in parallel per IP
-  const enrichmentPromises = allIps.map(async (ip) => {
-    const tasks = [];
-
-    // OTX enrichment (if IP is in OTX candidate set or always enrich known IPs)
-    if (ENABLE_OTX) {
-      tasks.push(
-        enrichIpFromOtx(OTX_KEY, ip)
-          .then(result => {
-            if (result) {
-              ipMap[ip].otx = result;
-              ipMap[ip].sourceStatus.otx = 'ok';
-            } else {
-              ipMap[ip].sourceStatus.otx = 'failed';
-            }
-          })
-          .catch((err) => {
-            ipMap[ip].sourceStatus.otx = 'failed';
-            logProviderFailure('otx', {
-              category: getProviderErrorCategory(err),
-              ipAddress: ip,
-              reason: 'enrichment_exception',
-              details: err?.message || '',
-            });
-          })
-      );
-    }
-
-    // Shodan enrichment
-    if (ENABLE_SHODAN) {
-      tasks.push(
-        enrichIpFromShodan(SHODAN_KEY, ip)
-          .then(result => {
-            if (result) {
-              ipMap[ip].shodan = result;
-              ipMap[ip].sourceStatus.shodan = 'ok';
-            } else {
-              ipMap[ip].sourceStatus.shodan = 'failed';
-            }
-          })
-          .catch((err) => {
-            ipMap[ip].sourceStatus.shodan = 'failed';
-            logProviderFailure('shodan', {
-              category: getProviderErrorCategory(err),
-              ipAddress: ip,
-              reason: 'enrichment_exception',
-              details: err?.message || '',
-            });
-          })
-      );
-    }
-
-    await Promise.allSettled(tasks);
-  });
-
-  await Promise.allSettled(enrichmentPromises);
-
-  // Step 3: Resolve geo and build rule-based threats first
-  const fusionPromises = allIps.map(async (ip) => {
-    const entry = ipMap[ip];
-
-    // Build geo fallback from best available source
-    const geoFallback = {};
-    if (entry.abuse?.countryCode) {
-      geoFallback.countryCode = entry.abuse.countryCode;
-      geoFallback.countryName = toCountryName(entry.abuse.countryCode);
-    }
-    if (entry.otx?.countryCode && !geoFallback.countryCode) {
-      geoFallback.countryCode = entry.otx.countryCode;
-      geoFallback.countryName = toCountryName(entry.otx.countryCode);
-    }
-    if (entry.shodan) {
-      if (!geoFallback.countryCode && entry.shodan.countryCode) {
-        geoFallback.countryCode = entry.shodan.countryCode;
-        geoFallback.countryName = entry.shodan.countryName || toCountryName(entry.shodan.countryCode);
+      {
+        abuseScore: abuse ? abuse.abuseScore : null,
+        otxHits: otx ? otx.otxHits : null,
+        portExposure: shodan ? shodan.portExposure : null,
       }
-      if (Number.isFinite(entry.shodan.lat) && Number.isFinite(entry.shodan.lng)) {
-        geoFallback.lat = entry.shodan.lat;
-        geoFallback.lng = entry.shodan.lng;
-      }
-      geoFallback.city = entry.shodan.city || geoFallback.city;
-      geoFallback.region = entry.shodan.region || geoFallback.region;
-    }
+    );
 
-    const geo = await resolveGeo(ip, IPINFO_KEY, geoFallback);
+    const scoring = calculateThreatScore(
+      {
+        abuseScore: abuse ? abuse.abuseScore : 0,
+        otxHits: otx ? otx.otxHits : 0,
+        portExposure: shodan ? shodan.portExposure : 0,
+      },
+      sourceStatus
+    );
 
-    const sourceStatus = normalizeSourceStatus(entry.sourceStatus || {}, {
-      abuseScore: entry.abuse ? entry.abuse.abuseScore : null,
-      otxHits: entry.otx ? entry.otx.otxHits : null,
-      portExposure: entry.shodan ? entry.shodan.portExposure : null,
-    });
-
-    // Fuse signals — use numeric defaults while scoring normalizes only across available weights
-    const fusedSignals = {
-      abuseScore: entry.abuse ? entry.abuse.abuseScore : 0,
-      otxHits: entry.otx ? entry.otx.otxHits : 0,
-      portExposure: entry.shodan ? entry.shodan.portExposure : 0,
-    };
-
-    const scoring = calculateThreatScore(fusedSignals, sourceStatus);
-
-    // Determine primary provider (the one that contributed the most weight)
     const providers = [];
-    if (entry.abuse) providers.push('abuseipdb');
-    if (entry.otx) providers.push('otx');
-    if (entry.shodan) providers.push('shodan');
-    const provider = providers.length > 0 ? providers.join('+') : 'fallback';
+    if (abuse) providers.push('abuseipdb');
+    if (otx) providers.push('otx');
+    if (shodan) providers.push('shodan');
+    providers.forEach((p) => sourcesUsedSet.add(p));
 
     const ruleThreat = normalizeThreatRecord({
       ipAddress: ip,
@@ -2161,72 +2439,47 @@ async function aggregateThreats(mode, threshold) {
       signals: scoring.signals,
       sources: sourceStatus,
       timestamp: Date.now(),
-      provider,
+      provider: providers.length > 0 ? providers.join('+') : 'seed',
     });
-
-    return ruleThreat;
+    if (ruleThreat) ruleThreats.push(ruleThreat);
   });
 
-  const ruleResults = await Promise.allSettled(fusionPromises);
-  const ruleThreats = ruleResults
-    .filter(r => r.status === 'fulfilled' && r.value)
-    .map(r => r.value);
-
-  const topThreatIndexes = ruleThreats
-    .map((threat, index) => ({
-      index,
-      score: clampNumber(threat?.score, 0, 100, 0),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, AI_TOP_N)
-    .map((item) => item.index);
-
-  const topThreatIndexSet = new Set(topThreatIndexes);
-  const liveSamplingAllowed = consumeLiveAiSamplingWindow();
+  const topThreatIndexSet = new Set(
+    ruleThreats
+      .map((threat, index) => ({ index, score: clampNumber(threat?.score, 0, 100, 0) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, AI_TOP_N)
+      .map((item) => item.index)
+  );
 
   const attacks = [];
   for (let index = 0; index < ruleThreats.length; index += 1) {
     const threatWithAi = await applyOptionalAiLayer(ruleThreats[index], mode, threshold, {
       eligibleForTopN: topThreatIndexSet.has(index),
       explicitRequest: false,
-      liveSamplingAllowed,
     });
-    if (threatWithAi) {
-      attacks.push(threatWithAi);
-    }
+    if (threatWithAi) attacks.push(threatWithAi);
   }
-
-  // Determine which top-level sources contributed
-  const sourcesUsed = [];
-  if (Object.values(ipMap).some(e => e.abuse)) sourcesUsed.push('abuseipdb');
-  if (Object.values(ipMap).some(e => e.otx)) sourcesUsed.push('otx');
-  if (Object.values(ipMap).some(e => e.shodan)) sourcesUsed.push('shodan');
 
   return {
     attacks: finalizeAttacks(attacks),
-    sourcesUsed,
+    sourcesUsed: [...sourcesUsedSet],
+    degraded,
+    degradedReason,
   };
 }
 
 function finalizeAttacks(attacks) {
   const seenIps = new Set();
-  const deduped = attacks.filter((attack) => {
-    const key = attack.sourceIp || `${attack.sourceLat}:${attack.sourceLng}`;
-    if (seenIps.has(key)) return false;
-    seenIps.add(key);
-    return true;
-  });
-
-  const shuffled = shuffle(deduped);
-  const min = Math.min(MIN_ATTACKS, shuffled.length);
-  const max = Math.min(MAX_ATTACKS, shuffled.length);
-
-  if (max === 0) return [];
-  const count = min === max
-    ? max
-    : Math.floor(Math.random() * (max - min + 1)) + min;
-
-  return shuffled.slice(0, count);
+  return attacks
+    .filter((attack) => {
+      const key = attack.sourceIp || `${attack.sourceLat}:${attack.sourceLng}`;
+      if (seenIps.has(key)) return false;
+      seenIps.add(key);
+      return true;
+    })
+    .sort((a, b) => (b.score - a.score) || String(a.sourceIp).localeCompare(String(b.sourceIp)))
+    .slice(0, MAX_ATTACKS);
 }
 
 function resolveActiveSources() {
@@ -2239,23 +2492,21 @@ function resolveActiveSources() {
 
 app.get('/api/health', (req, res) => {
   resetUsageIfNeeded();
-  pruneAiCache(Date.now());
 
   const aiSelection = resolveRequestAiSelection(req);
   const activeAiMode = aiSelection.mode;
   const activeAiProvider = aiSelection.provider;
-  const aiReadiness = activeAiProvider ? 'ready' : 'no_keys';
 
   return res.json({
     status: 'ok',
-    cacheAge: cache.timestamp ? (Date.now() - cache.timestamp) : null,
+    cacheAge: latestThreatCacheAt ? (Date.now() - latestThreatCacheAt) : null,
     activeSources: resolveActiveSources(),
     ai: {
       enabled: Boolean(activeAiProvider),
       provider: activeAiProvider || 'none',
       cacheSize: aiCache.size,
+      metrics: snapshotAiMetrics(),
     },
-    aiMetrics: snapshotAiMetrics(),
     aiProvider: {
       provider: getActiveProvider(),
       keys: {
@@ -2268,10 +2519,10 @@ app.get('/api/health', (req, res) => {
       available: AI_PROVIDER_OPTIONS,
     },
     providers: {
-      abuseipdb: ENABLE_ABUSE ? "enabled" : "missing_key",
-      ipinfo: ENABLE_IPINFO ? "enabled" : "missing_key",
-      otx: ENABLE_OTX ? (OTX_KEY ? "enabled_with_key" : "enabled_public") : "disabled",
-      shodan: ENABLE_SHODAN ? "enabled" : "missing_key"
+      abuseipdb: getProviderHealthLabel('abuseipdb'),
+      ipinfo: getProviderHealthLabel('ipinfo'),
+      otx: getProviderHealthLabel('otx'),
+      shodan: getProviderHealthLabel('shodan')
     },
     usage: {
       abuseipdb: usage.abuseipdb,
@@ -2282,94 +2533,195 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/ai/health', (req, res) => {
+  const aiSelection = resolveRequestAiSelection(req);
+  const provider = aiSelection.provider;
+  const model = provider === 'openai'
+    ? AI_MODEL
+    : provider === 'gemini'
+      ? getGeminiModelName()
+      : 'none';
+
+  return res.json({
+    provider: provider || 'none',
+    model,
+    geminiConfigured: hasGemini,
+    openaiConfigured: hasOpenAI,
+    aiEnabled: Boolean(provider),
+  });
+});
 
 
-// ── Main endpoint ────────────────────────────────────────────
+
+//Main endpoint
 async function handleThreatsRequest(req, res) {
   resetUsageIfNeeded();
 
   const aiSelection = resolveRequestAiSelection(req);
   const activeAiMode = aiSelection.mode;
-  const activeAiProvider = resolveAiProviderFromMode(activeAiMode);
-  const aiProviderCacheKey = getAiProviderCacheKey(activeAiMode);
+  const cacheKey = getThreatCacheKey(activeAiMode, aiSelection.threshold);
+
+  if (!ENABLE_ABUSE) warnMissingKeyOnce('abuseipdb', 'ABUSEIPDB_API_KEY');
+  if (!ENABLE_SHODAN) warnMissingKeyOnce('shodan', 'SHODAN_API_KEY');
+  if (!ENABLE_IPINFO) warnMissingKeyOnce('ipinfo', 'IPINFO_API_KEY');
+
+  const respond = (entry, { cached, stale = false }) => res.json({
+    attacks: entry.attacks,
+    cached,
+    stale,
+    cacheAgeMs: Math.max(0, Date.now() - entry.timestamp),
+    degraded: entry.degraded,
+    degradedReason: entry.degradedReason,
+    sourcesUsed: entry.sourcesUsed,
+  });
+
+  const fresh = readThreatCache(cacheKey);
+  if (fresh) return respond(fresh, { cached: true });
 
   try {
-    if (DEBUG_PROVIDER && aiSelection.requestedMode) {
-      console.log(`[AI Provider] Request override mode=${aiSelection.requestedMode} -> resolved=${activeAiProvider || 'none'}`);
+    let pending = inFlightFetchPromises.get(cacheKey);
+    if (!pending) {
+      pending = aggregateThreats(activeAiMode, aiSelection.threshold)
+        .then((aggregated) => {
+          const entry = {
+            attacks: aggregated.attacks,
+            degraded: Boolean(aggregated.degraded),
+            degradedReason: aggregated.degradedReason || null,
+            sourcesUsed: aggregated.sourcesUsed || [],
+            timestamp: Date.now(),
+          };
+          // An empty, non-degraded cycle is a real answer; only skip caching total failures.
+          if (entry.attacks.length > 0) writeThreatCache(cacheKey, entry);
+          return entry;
+        })
+        .finally(() => {
+          inFlightFetchPromises.delete(cacheKey);
+        });
+      inFlightFetchPromises.set(cacheKey, pending);
     }
 
-    if (!ENABLE_ABUSE) warnMissingKeyOnce('abuseipdb', 'ABUSEIPDB_API_KEY');
-    if (!ENABLE_SHODAN) warnMissingKeyOnce('shodan', 'SHODAN_API_KEY');
-    if (!ENABLE_IPINFO) {
-      warnMissingKeyOnce('ipinfo', 'IPINFO_API_KEY');
-    }
-
-    if (isCacheFresh(aiProviderCacheKey)) {
-      const cachedAttacks = cache.data.map(a => ({...a, provider: 'fallback'}));
-      if (DEBUG_PROVIDER) {
-        cachedAttacks.forEach(a => console.log(`[DEBUG] Attack from ${a.provider}:`, a.id));
-      }
-      return res.json({ attacks: cachedAttacks });
-    }
-
-    const inFlightPromise = inFlightFetchPromises.get(aiProviderCacheKey);
-    if (inFlightPromise) {
-      const pendingResult = await inFlightPromise;
-      if (DEBUG_PROVIDER) {
-        pendingResult.forEach(a => console.log(`[DEBUG] Attack from ${a.provider}:`, a.id));
-      }
-      return res.json({ attacks: pendingResult });
-    }
-
-    const fetchPromise = (async () => {
-      const aggregated = await aggregateThreats(activeAiMode, aiSelection.threshold);
-
-      const attacks = aggregated.attacks;
-
-      if (attacks.length > 0) {
-        cache = {
-          data: attacks,
-          timestamp: Date.now(),
-          aiProviderKey: aiProviderCacheKey,
-        };
-        return attacks;
-      }
-
-      if (cache.aiProviderKey === aiProviderCacheKey && cache.data.length > 0) {
-        return cache.data.map(a => ({...a, provider: 'fallback'}));
-      }
-
-      return [];
-    })()
-      .catch((err) => {
-        console.error('Aggregation failure:', err.message);
-        if (cache.aiProviderKey === aiProviderCacheKey && cache.data.length > 0) {
-          return cache.data.map(a => ({...a, provider: 'fallback'}));
-        }
-        return [];
-      })
-      .finally(() => {
-        inFlightFetchPromises.delete(aiProviderCacheKey);
-      });
-
-    inFlightFetchPromises.set(aiProviderCacheKey, fetchPromise);
-
-    const finalAttacks = await fetchPromise;
-    if (DEBUG_PROVIDER) {
-      finalAttacks.forEach(a => console.log(`[DEBUG] Attack from ${a.provider}:`, a.id));
-    }
-    return res.json({ attacks: finalAttacks });
+    const entry = await pending;
+    return respond(entry, { cached: false });
   } catch (err) {
-    console.error('Server error:', err.message);
-    if (cache.aiProviderKey === aiProviderCacheKey && cache.data.length > 0) {
-      return res.json({ attacks: cache.data.map(a => ({...a, provider: 'fallback'})) });
-    }
-    return res.json({ attacks: [] });
+    console.error('[Threats] Aggregation failure:', err?.stack || err);
+    const stale = peekThreatCache(cacheKey);
+    if (stale) return respond(stale, { cached: true, stale: true });
+    return res.status(502).json({ error: 'aggregation_failed', attacks: [] });
   }
 }
 
 app.get('/api/threats', handleThreatsRequest);
 app.post('/api/threats', handleThreatsRequest);
+
+// ── Manual AI Analysis Endpoint ────────────────────────────────
+app.post('/api/analyze', aiRateLimiter, async (req, res) => {
+  const startTime = Date.now();
+  const { signals } = req.body || {};
+  const ip = sanitizeIpInput(req.body?.ip);
+
+  if (!ip || isPrivateOrBogon(ip)) {
+    return res.status(400).json({ error: 'Missing or invalid public ip field' });
+  }
+
+  const aiSelection = resolveRequestAiSelection(req);
+  const provider = aiSelection.provider;
+
+  if (!provider) {
+    console.warn('[Analyze] No AI provider available');
+    return res.status(503).json({
+      error: 'No AI provider available',
+      type: 'LOW',
+      confidence: 0,
+      reasoning: AI_ERROR_LABELS[AI_ERROR_CODES.NO_PROVIDER],
+      reasonCode: AI_ERROR_CODES.NO_PROVIDER,
+      reasonDetail: `mode=${aiSelection.mode || 'unknown'}`,
+      provider: 'none',
+      latencyMs: Date.now() - startTime,
+    });
+  }
+
+  // Build a normalized threat object for classification
+  const abuseScore = clampNumber(signals?.abuseScore, 0, 100, 0);
+  const otxHits = toNonNegativeNumber(signals?.otxHits ?? 0);
+  const portExposure = toNonNegativeNumber(signals?.portExposure ?? 0);
+  const country = sanitizeCountryInput(signals?.country) || 'Unknown';
+
+  const threatPayload = {
+    sourceIp: ip,
+    sourceCountry: country,
+    provider: 'manual',
+    score: clampNumber(abuseScore, 0, 100, 0),
+    intensity: 5,
+    signals: { abuseScore, otxHits, portExposure },
+  };
+
+  // Check AI cache first
+  const cacheKey = buildAiCacheKey('analyze', { sourceIp: ip, signals: { abuseScore, otxHits, portExposure } });
+  const cached = readAiCache(cacheKey);
+  if (cached?.result) {
+    console.log(`[Analyze] Cache hit for ${ip}`);
+    incrementAiMetric('cacheHits');
+    return res.json({
+      type: cached.result.type || 'LOW',
+      confidence: cached.result.confidence || 0,
+      reasoning: cached.result.reason || cached.result.reasoning || '',
+      provider: cached.providerUsed || provider,
+      latencyMs: Date.now() - startTime,
+      cached: true,
+    });
+  }
+
+  console.log(`[Analyze] Manual AI request for ${ip} via ${provider}`);
+  incrementAiMetric('totalCalls');
+  incrementAiMetric('cacheMisses');
+
+  try {
+    const aiOutcome = await classifyThreatWithAI(threatPayload, aiSelection.mode);
+
+    if (aiOutcome.result) {
+      incrementAiMetric('successCalls');
+      // Cache for 5 minutes
+      writeAiCache(cacheKey, aiOutcome, AI_CACHE_TTL_MS);
+
+      console.log(`[Analyze] Success: type=${aiOutcome.result.type} confidence=${aiOutcome.result.confidence} provider=${aiOutcome.providerUsed}`);
+      return res.json({
+        type: aiOutcome.result.type || 'LOW',
+        confidence: aiOutcome.result.confidence || 0,
+        reasoning: aiOutcome.result.reason || aiOutcome.result.reasoning || '',
+        provider: aiOutcome.providerUsed || provider,
+        latencyMs: Date.now() - startTime,
+        cached: false,
+      });
+    }
+
+    incrementAiMetric('failedCalls');
+    console.warn(`[Analyze] AI returned no result for ${ip} (attempted: ${aiOutcome.attemptedProviders.join(',')})`);
+    return res.status(502).json({
+      error: 'AI classification failed',
+      type: 'LOW',
+      confidence: 0,
+      reasoning: aiOutcome?.error?.reason || 'AI provider did not return a valid classification.',
+      reasonCode: aiOutcome?.error?.code || AI_ERROR_CODES.UPSTREAM_HTTP_ERROR,
+      reasonDetail: aiOutcome?.error?.detail || null,
+      provider: aiOutcome?.error?.provider || 'none',
+      latencyMs: Date.now() - startTime,
+      attemptedProviders: aiOutcome.attemptedProviders,
+    });
+  } catch (err) {
+    incrementAiMetric('failedCalls');
+    console.error(`[Analyze] Error for ${ip}:`, err.message);
+    return res.status(500).json({
+      error: 'Internal error during AI classification',
+      type: 'LOW',
+      confidence: 0,
+      reasoning: AI_ERROR_LABELS[AI_ERROR_CODES.NETWORK_ERROR],
+      reasonCode: AI_ERROR_CODES.NETWORK_ERROR,
+      reasonDetail: safeErrorDetail(err),
+      provider: 'none',
+      latencyMs: Date.now() - startTime,
+    });
+  }
+});
 
 // ── Incident Report Endpoint ───────────────────────────────────
 function buildReport(threat) {
@@ -2385,33 +2737,35 @@ function buildReport(threat) {
   );
 
   return {
-    ip: String(threat.sourceIp || threat.ip || ''),
-    sourceCountry: String(threat.sourceCountry || ''),
-    targetCountry: String(threat.targetCountry || ''),
-    timestamp: threat.timestamp ? new Date(threat.timestamp).toISOString() : new Date().toISOString(),
-    classification: String(threat.classification || 'LOW'),
-    score: Number.isFinite(threat.score) ? threat.score : 0,
+    ip: sanitizeIpInput(threat.sourceIp || threat.ip),
+    sourceCountry: sanitizeCountryInput(threat.sourceCountry),
+    timestamp: Number.isFinite(new Date(threat.timestamp).getTime()) ? new Date(threat.timestamp).toISOString() : new Date().toISOString(),
+    classification: sanitizeClassificationInput(threat.classification),
+    score: clampNumber(threat.score, 0, 100, 0),
     signals: {
-      abuseScore: typeof threat.signals?.abuseScore === 'number' ? threat.signals.abuseScore : 0,
-      otxHits: typeof threat.signals?.otxHits === 'number' ? threat.signals.otxHits : 0,
-      portExposure: typeof threat.signals?.portExposure === 'number' ? threat.signals.portExposure : 0,
+      abuseScore: clampNumber(threat.signals?.abuseScore, 0, 100, 0),
+      otxHits: sanitizeCount(threat.signals?.otxHits),
+      portExposure: sanitizeCount(threat.signals?.portExposure),
       sourceStatus: reportSourceStatus,
     },
-    sources: reportSources.map(String),
+    sources: reportSources.slice(0, 8).map((source) => String(source).slice(0, 32)),
     sources_status: reportSourceStatus,
     ai: {
       used: Boolean(threat.ai?.used),
       confidence: typeof threat.ai?.confidence === 'number' ? threat.ai.confidence : null,
-      reasoning: threat.ai?.reason ? String(threat.ai.reason) : null
+      reasoning: threat.ai?.reason ? String(threat.ai.reason).slice(0, 280) : null
     },
     ai_summary: emptyAiSummary(),
   };
 }
 
-app.post('/api/report', async (req, res) => {
+app.post('/api/report', aiRateLimiter, async (req, res) => {
   const threat = req.body && req.body.threat;
   if (!threat || typeof threat !== 'object') {
     return res.status(400).json({ error: 'Missing or invalid threat object in request body' });
+  }
+  if (!sanitizeIpInput(threat.sourceIp || threat.ip)) {
+    return res.status(400).json({ error: 'Threat must include a valid source IP' });
   }
 
   try {
@@ -2441,11 +2795,40 @@ app.post('/api/report', async (req, res) => {
 
     return res.json(report);
   } catch (err) {
+    console.error('[Report] generation failed:', err?.stack || err);
     return res.status(500).json({ error: 'Failed to generate report' });
   }
 });
 
-// ── Start ────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`⚡ Threat API running on http://localhost:${PORT}`);
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found' });
 });
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid_json' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'payload_too_large' });
+  console.error('[Server] Unhandled error:', err?.stack || err);
+  return res.status(500).json({ error: 'internal_error' });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server] Unhandled rejection:', reason?.stack || reason);
+});
+
+// ── Start ────────────────────────────────────────────────────
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`Threat API running on http://localhost:${PORT}`);
+  });
+
+  const shutdown = (signal) => {
+    console.log(`[Server] ${signal} received, shutting down`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5000).unref();
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+module.exports = { app, geminiRateLimit, scrubSecrets, safeErrorDetail, isPrivateOrBogon, calculateThreatScore, classifyFromScore, finalizeAttacks, sanitizeCountryInput, sanitizeIpInput, sanitizeClassificationInput, applyOptionalAiLayer, parseAiJson, normalizeAiResponse };
