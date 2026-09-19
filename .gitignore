@@ -40,3 +40,10 @@ desktop.ini
 
 # ── Test coverage ─────────────────────────────────────────────
 coverage/
+
+# ── Local runtime state ───────────────────────────────────────
+# Daily provider-usage counters written by the API server
+.usage.json
+
+# ── Local Claude Code settings ────────────────────────────────
+.claude/
