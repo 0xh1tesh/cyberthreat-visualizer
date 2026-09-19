@@ -8,16 +8,14 @@ export const ATTACK_TYPES = {
 };
 
 export const COLOR_MAP = {
-  [ATTACK_TYPES.DDOS]: '#ff4757',
-  [ATTACK_TYPES.MALWARE]: '#ffb142',
-  [ATTACK_TYPES.SCAN]: '#2ed573'
+  [ATTACK_TYPES.DDOS]: '#ff6b6b',
+  [ATTACK_TYPES.MALWARE]: '#ffb454',
+  [ATTACK_TYPES.SCAN]: '#5fd4a0'
 };
 
-export const generateId = () => Math.random().toString(36).slice(2, 11);
+let simIdCounter = 0;
+export const generateId = () => `sim-${++simIdCounter}`;
 
-const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-export const generateRandomIP = () => `${rand(1, 255)}.${rand(0, 255)}.${rand(0, 255)}.${rand(0, 255)}`;
 
 // Derive a score (0–100) and classification consistent with the arc type and intensity.
 // This ensures normalizeAttackData() never falls back to scoring from absent signals,
@@ -45,7 +43,6 @@ const createArc = ({
   sourceLat,
   sourceLng,
   sourceCountry,
-  sourceIp = generateRandomIP(),
   targetLat,
   targetLng,
   targetCountry,
@@ -64,7 +61,7 @@ const createArc = ({
     sourceLat,
     sourceLng,
     sourceCountry,
-    sourceIp,
+    synthetic: true,
     targetLat,
     targetLng,
     targetCountry,
