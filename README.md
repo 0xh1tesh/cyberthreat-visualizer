@@ -1,4 +1,4 @@
-<h1 align="center"> Cyberthreat Visualizer</h1>
+<h1 align="center"> Cyberthreat Visualizer (Basic Prototype)</h1>
 
 <p align="center">
   <strong>Real-time 3D cyber threat intelligence dashboard powered by multi-source OSINT APIs and AI classification</strong>
