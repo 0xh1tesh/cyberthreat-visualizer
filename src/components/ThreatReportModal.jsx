@@ -45,7 +45,7 @@ const buildRuleReasoning = (classification, signals, sources) => {
 const Section = ({ title, children, action }) => (
   <section className="space-y-3">
     <div className="flex items-center justify-between gap-3">
-      <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
+      <h3 className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-[0.08em] text-ink"><span className="size-1.5 rotate-45 bg-info" aria-hidden="true" />{title}</h3>
       {action}
     </div>
     {children}
@@ -53,9 +53,9 @@ const Section = ({ title, children, action }) => (
 );
 
 const SignalTile = ({ label, meta }) => (
-  <div className="rounded-lg border border-line bg-canvas p-3" title={meta.tooltip || undefined}>
-    <p className="text-2xs font-medium uppercase tracking-wide text-ink-faint">{label}</p>
-    <p className={cn('mt-1 text-lg font-semibold tabular', meta.faded ? 'text-ink-faint' : 'text-ink')}>
+  <div className="border border-line border-t-2 border-t-line-strong bg-canvas p-3" title={meta.tooltip || undefined}>
+    <p className="readout">{label}</p>
+    <p className={cn('mt-1 font-mono text-lg font-semibold tabular', meta.faded ? 'text-ink-faint' : 'text-ink')}>
       {meta.faded ? 'Unavailable' : meta.text}
     </p>
   </div>
@@ -210,17 +210,17 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 16 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl"
+            className="hud flex max-h-[100dvh] w-full flex-col overflow-hidden border border-line-strong bg-surface sm:max-h-[86vh] sm:max-w-2xl"
           >
-            <header className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+            <header className="flex items-start justify-between gap-4 border-b border-line bg-canvas/60 px-5 py-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 id={titleId} className="text-base font-semibold text-ink">Threat report</h2>
+                  <h2 id={titleId} className="text-lg font-bold uppercase tracking-[0.1em] text-ink">Threat report</h2>
                   <Badge tone={meta.tone}>{meta.label}</Badge>
                   {threat.synthetic && <Badge tone="info">Simulated</Badge>}
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
-                  <span>{threat.origin.country}</span>
+                  <span className="text-sm font-medium text-ink">{threat.origin.country}</span>
                   {ip && (
                     <button
                       type="button"
@@ -232,13 +232,13 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
                       {copied ? <Check size={12} className="text-ok" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
                     </button>
                   )}
-                  <time className="tabular" dateTime={threat.timestamp.toISOString()}>{threat.timestamp.toLocaleString()}</time>
+                  <time className="font-mono tabular" dateTime={threat.timestamp.toISOString()}>{threat.timestamp.toLocaleString()}</time>
                 </div>
               </div>
               <div className="flex shrink-0 items-start gap-3">
                 <div className="text-right">
-                  <p className={cn('text-3xl font-semibold leading-8 tabular', tone.text)}>{Math.round(threat.score)}</p>
-                  <p className="text-2xs text-ink-faint">threat score</p>
+                  <p className={cn('font-mono text-4xl font-semibold leading-9 tabular', tone.text)}>{Math.round(threat.score)}</p>
+                  <p className="readout">Threat score</p>
                 </div>
                 <IconButton label="Close report" onClick={onClose} data-autofocus>
                   <X size={15} aria-hidden="true" />
@@ -262,7 +262,7 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
                     type="button"
                     onClick={generate}
                     disabled={status === 'loading'}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 border border-ai/40 bg-ai/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ai transition-colors hover:bg-ai/20 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {status === 'loading' ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Sparkles size={13} className="text-ai" aria-hidden="true" />}
                     {status === 'loading' ? 'Generating' : 'Generate summary'}
@@ -302,7 +302,7 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
                       .filter(([, text]) => text)
                       .map(([label, text]) => (
                         <div key={label}>
-                          <p className="text-2xs font-medium uppercase tracking-wide text-ink-faint">{label}</p>
+                          <p className="readout">{label}</p>
                           <p className="mt-1 text-[13px] leading-6 text-ink">{text}</p>
                         </div>
                       ))}

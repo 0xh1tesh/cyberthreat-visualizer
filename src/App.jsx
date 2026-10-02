@@ -5,9 +5,10 @@ import StatusBar from './components/StatusBar';
 import Overview from './components/Overview';
 import ThreatFeed from './components/ThreatFeed';
 import ThreatReportModal from './components/ThreatReportModal';
+import ScopeOverlay from './components/ScopeOverlay';
 import { ScenarioDetails, SimulationControls } from './components/SimulationPanels';
 import { ClassMix, ObservationsTimeline, PhaseIntensity } from './components/Analytics';
-import { Segmented } from './components/ui';
+import { CommandButton, Segmented, StatusDot } from './components/ui';
 import { useThreatFeed } from './hooks/useThreatFeed';
 import { useSimulation } from './hooks/useSimulation';
 import { useThreatAnalysis } from './hooks/useThreatAnalysis';
@@ -43,10 +44,10 @@ const Banner = ({ tone = 'warn', icon: Icon, children, action }) => (
   <div
     role={tone === 'crit' ? 'alert' : 'status'}
     className={cn(
-      'flex items-center gap-2.5 rounded-lg border px-3 py-2 text-xs backdrop-blur-0',
-      tone === 'crit' && 'border-crit/30 bg-canvas text-crit',
-      tone === 'warn' && 'border-warn/30 bg-canvas text-warn',
-      tone === 'info' && 'border-info/30 bg-canvas text-info',
+      'flex items-center gap-2.5 border border-l-2 bg-canvas/95 px-3 py-2 text-[13px]',
+      tone === 'crit' && 'border-crit/30 border-l-crit text-crit',
+      tone === 'warn' && 'border-warn/30 border-l-warn text-warn',
+      tone === 'info' && 'border-info/30 border-l-info text-info',
     )}
   >
     <Icon size={14} className="shrink-0" aria-hidden="true" />
@@ -56,10 +57,10 @@ const Banner = ({ tone = 'warn', icon: Icon, children, action }) => (
 );
 
 const Legend = () => (
-  <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-line bg-canvas px-3 py-2" aria-label="Severity legend">
+  <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 border border-line bg-canvas/90 px-3 py-2" aria-label="Severity legend">
     {CLASS_ORDER.map((key) => (
-      <li key={key} className="flex items-center gap-1.5 text-2xs text-ink-muted">
-        <span className="size-2 rounded-full" style={{ background: CLASS_META[key].color }} aria-hidden="true" />
+      <li key={key} className="readout flex items-center gap-1.5 text-ink-muted!">
+        <span className="size-2 rotate-45" style={{ background: CLASS_META[key].color }} aria-hidden="true" />
         {CLASS_META[key].label}
       </li>
     ))}
@@ -163,10 +164,10 @@ const App = () => {
   );
 
   const banners = (
-    <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col gap-2 [&>*]:pointer-events-auto">
+    <div className="pointer-events-none absolute inset-x-3 top-11 z-10 flex flex-col gap-2 [&>*]:pointer-events-auto">
       {!live && (
         <Banner tone="info" icon={Globe2}>
-          <strong className="font-medium">Simulation</strong> · a historical scenario replay with illustrative routes, not live telemetry.
+          <strong className="font-semibold uppercase tracking-wider">Simulation.</strong> A historical scenario replay with illustrative routes, not live telemetry.
         </Banner>
       )}
       {live && feed.status === 'offline' && (
@@ -174,9 +175,9 @@ const App = () => {
           tone="crit"
           icon={WifiOff}
           action={(
-            <button type="button" onClick={feed.refresh} className="inline-flex items-center gap-1.5 rounded-md border border-crit/40 px-2 py-1 font-medium text-crit hover:bg-crit/10">
+            <CommandButton tone="crit" onClick={feed.refresh}>
               <RefreshCw size={12} aria-hidden="true" /> Retry
-            </button>
+            </CommandButton>
           )}
         >
           Cannot reach the API. {feed.attacks.length > 0 ? 'Showing the last known data.' : 'Retrying automatically.'}
@@ -190,14 +191,18 @@ const App = () => {
     </div>
   );
 
+  const sensor = live && feed.attacks[0] ? { lat: feed.attacks[0].targetLat, lng: feed.attacks[0].targetLng } : null;
+  const formatCoord = (value, pos, neg) => `${Math.abs(value).toFixed(1)}°${value >= 0 ? pos : neg}`;
+
   const globe = (
-    <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-canvas">
-      <Suspense fallback={<div className="grid h-full place-items-center text-sm text-ink-muted" role="status">Preparing globe…</div>}>
+    <div className="hud relative min-h-0 flex-1 overflow-hidden border border-line bg-canvas" style={{ containerType: 'size' }}>
+      <ScopeOverlay />
+      <Suspense fallback={<div className="readout grid h-full place-items-center" role="status">Acquiring globe…</div>}>
         <GlobeView
           attacks={attacks}
           currentStep={sim.currentStep}
           highlightedCountries={sim.currentStep?.affectedRegions}
-          highlightColor={sim.scenario === 'mirai' ? '#6cb6ff' : '#ff6b6b'}
+          highlightColor={sim.scenario === 'mirai' ? CLASS_META.SCAN.color : CLASS_META.DDOS.color}
           isPlaying={sim.isPlaying}
           onAttackClick={handleGlobeClick}
           onHoverAttack={setHoveredId}
@@ -206,34 +211,45 @@ const App = () => {
         />
       </Suspense>
 
+      <div className="scanlines pointer-events-none absolute inset-0" aria-hidden="true" />
+
+      <div className="pointer-events-none absolute inset-x-3 top-3 flex items-start justify-between gap-3">
+        <p className="readout flex items-center gap-2 text-ink!">
+          <StatusDot tone={live ? (feed.status === 'offline' ? 'crit' : feed.status === 'live' ? 'ok' : 'warn') : 'info'} pulse={live && feed.status === 'live'} />
+          {live ? 'Live intercept' : `Replay: ${sim.scenarioMeta.label}`}
+        </p>
+        <p className="readout hidden text-right sm:block">
+          {sensor
+            ? <>Sensor <span className="text-info">{formatCoord(sensor.lat, 'N', 'S')} {formatCoord(sensor.lng, 'E', 'W')}</span></>
+            : !live && <>Phase <span className="text-info">{String(sim.stepIndex + 1).padStart(2, '0')}/{String(sim.steps.length).padStart(2, '0')}</span></>}
+        </p>
+      </div>
+
       {banners}
 
-      <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col items-start gap-2">
+      <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-3">
         <Legend />
+        <p className="readout hidden max-w-[24ch] text-right lg:block">Drag to rotate. Select an arc for its report.</p>
       </div>
 
       {live && feed.status === 'live' && attacks.length === 0 && (
-        <p className="absolute inset-x-0 bottom-16 text-center text-sm text-ink-muted">No threats match this filter.</p>
+        <p className="readout absolute inset-x-0 bottom-16 text-center">No threats match this filter</p>
       )}
 
       {!live && sim.complete && (
-        <div className="absolute inset-0 z-20 grid place-items-center bg-black/60 p-4">
-          <div role="dialog" aria-label="Simulation complete" className="w-full max-w-sm rounded-xl border border-line bg-surface p-5 text-center">
-            <p className="text-base font-semibold text-ink">Simulation complete</p>
-            <p className="mt-1 text-[13px] text-ink-muted">
-              {sim.scenarioMeta.label} · {sim.steps.length} phases replayed
+        <div className="absolute inset-0 z-20 grid place-items-center bg-canvas/70 p-4">
+          <div role="dialog" aria-label="Simulation complete" className="hud w-full max-w-sm border border-line-strong bg-surface p-5 text-center">
+            <p className="text-lg font-bold uppercase tracking-[0.1em] text-info">Replay complete</p>
+            <p className="mt-1 text-sm text-ink-muted">
+              {sim.scenarioMeta.label}: {sim.steps.length} phases replayed
             </p>
             <div className="mt-4 flex justify-center gap-2">
-              <button type="button" onClick={sim.reset} className="rounded-lg bg-ink px-3.5 py-2 text-xs font-medium text-canvas hover:opacity-90">
+              <button type="button" onClick={sim.reset} className="border border-info bg-info px-3.5 py-2 text-xs font-bold uppercase tracking-wider text-canvas hover:bg-info/85">
                 Restart
               </button>
-              <button
-                type="button"
-                onClick={() => sim.selectScenario(sim.scenario === 'wannacry' ? 'mirai' : 'wannacry')}
-                className="rounded-lg border border-line px-3.5 py-2 text-xs font-medium text-ink hover:border-line-strong"
-              >
+              <CommandButton onClick={() => sim.selectScenario(sim.scenario === 'wannacry' ? 'mirai' : 'wannacry')} className="px-3.5 py-2">
                 Switch scenario
-              </button>
+              </CommandButton>
             </div>
           </div>
         </div>
@@ -248,7 +264,7 @@ const App = () => {
   ];
 
   return (
-    <div className="flex h-dvh flex-col bg-canvas text-ink">
+    <div className="flex h-dvh flex-col text-ink">
       <Header mode={mode} onModeChange={handleModeChange} provider={provider} onProviderChange={setProvider} status={live ? feed.status : 'simulation'} />
 
       <main className="flex min-h-0 flex-1 gap-3 p-3">
@@ -289,7 +305,7 @@ const App = () => {
           <div className="flex min-w-0 flex-1 flex-col">{sideNode}</div>
         )}
         {layout === 'compact' && compactView === 'overview' && (
-          <div className="scroll-thin flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
+          <div className="scroll-thin flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto [&>*]:shrink-0">
             {overviewNode}
             {analyticsNode}
           </div>
@@ -297,7 +313,7 @@ const App = () => {
       </main>
 
       {layout === 'compact' && (
-        <nav aria-label="Sections" className="flex shrink-0 border-t border-line bg-canvas pb-[env(safe-area-inset-bottom)]">
+        <nav aria-label="Sections" className="flex shrink-0 border-t border-line bg-canvas/95 pb-[env(safe-area-inset-bottom)]">
           {compactTabs.map((tab) => (
             <button
               key={tab.value}
@@ -305,8 +321,8 @@ const App = () => {
               aria-current={compactView === tab.value ? 'page' : undefined}
               onClick={() => setCompactView(tab.value)}
               className={cn(
-                'flex flex-1 flex-col items-center gap-1 py-2.5 text-2xs font-medium transition-colors',
-                compactView === tab.value ? 'text-ink' : 'text-ink-faint',
+                '-mt-px flex flex-1 flex-col items-center gap-1 border-t-2 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors',
+                compactView === tab.value ? 'border-info text-info' : 'border-transparent text-ink-faint',
               )}
             >
               <tab.icon size={18} aria-hidden="true" />

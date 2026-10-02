@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react';
 import { Database, Globe2, ShieldAlert } from 'lucide-react';
-import { Badge, EmptyState, Panel, Stat, StatusDot } from './ui';
+import { Badge, EmptyState, Meter, Panel, Stat, StatusDot } from './ui';
 import { AI_OPTIONS } from './Header';
 import { cn } from '../lib/utils';
-import { CLASS_META, TONE } from '../lib/palette';
+import { CLASS_META, CLASS_ORDER, TONE } from '../lib/palette';
 
 const PROVIDERS = [
   { key: 'abuseipdb', name: 'AbuseIPDB', role: 'IP reputation' },
@@ -66,15 +66,28 @@ const Overview = ({ threats, health, aiHealth, provider, onProviderChange, statu
 
   return (
     <div className="flex min-h-0 flex-col gap-3">
-      <Panel title="Threat level" icon={ShieldAlert}>
+      <Panel title="Threat condition" icon={ShieldAlert}>
         {level ? (
           <>
-            <div className="flex items-center gap-3">
-              <span className={cn('size-2.5 rounded-full', levelTone.solid)} aria-hidden="true" />
-              <p className={cn('text-2xl font-semibold', levelTone.text)}>{level.severity}</p>
-            </div>
-            <p className="mt-1 text-xs text-ink-muted">Highest severity currently observed</p>
-            <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-line pt-3">
+            <p className="readout">Highest severity observed</p>
+            <p className={cn('mt-1 text-4xl font-bold uppercase leading-none tracking-[0.06em]', levelTone.text)}>{level.severity}</p>
+            <ol className="mt-4 grid grid-cols-4 gap-1" aria-label={`Condition ${level.rank + 1} of 4`}>
+              {[...CLASS_ORDER].reverse().map((key) => {
+                const step = CLASS_META[key];
+                const lit = step.rank <= level.rank;
+                return (
+                  <li key={key} aria-current={step.rank === level.rank ? 'step' : undefined}>
+                    <span
+                      className={cn('block h-2.5', !lit && 'bg-line')}
+                      style={lit ? { background: step.color, opacity: step.rank === level.rank ? 1 : 0.45 } : undefined}
+                      aria-hidden="true"
+                    />
+                    <span className={cn('readout mt-1 block text-[10px]!', step.rank === level.rank && TONE[step.tone].text)}>{step.severity}</span>
+                  </li>
+                );
+              })}
+            </ol>
+            <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-dashed border-line-strong pt-3">
               <Stat label="Active" value={threats.length} />
               <Stat label="Critical" value={summary.critical} tone={summary.critical ? 'crit' : undefined} />
               <Stat label="Avg score" value={summary.average} />
@@ -89,19 +102,15 @@ const Overview = ({ threats, health, aiHealth, provider, onProviderChange, statu
 
       <Panel title="Top origins" icon={Globe2}>
         {summary.origins.length > 0 ? (
-          <ol className="space-y-3">
-            {summary.origins.map(([country, count]) => (
-              <li key={country}>
-                <div className="flex items-center justify-between gap-3 text-[13px]">
-                  <span className="truncate text-ink">{country}</span>
-                  <span className="tabular text-ink-muted">{count}</span>
+          <ol className="space-y-2.5">
+            {summary.origins.map(([country, count], index) => (
+              <li key={country} className="grid grid-cols-[1.75rem_minmax(0,1fr)] items-center gap-x-2">
+                <span className="row-span-2 font-mono text-xs tabular text-ink-faint">{String(index + 1).padStart(2, '0')}</span>
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="truncate font-medium text-ink">{country}</span>
+                  <span className="font-mono text-xs tabular text-info">{count}</span>
                 </div>
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised" aria-hidden="true">
-                  <div
-                    className="h-full rounded-full bg-info transition-[width] duration-300"
-                    style={{ width: `${(count / maxOrigin) * 100}%` }}
-                  />
-                </div>
+                <Meter value={count / maxOrigin} className="mt-1" />
               </li>
             ))}
           </ol>
@@ -117,8 +126,8 @@ const Overview = ({ threats, health, aiHealth, provider, onProviderChange, statu
             return (
               <li key={item.key} className="flex items-center justify-between gap-3 py-2 first:pt-0">
                 <div className="min-w-0">
-                  <p className="truncate text-[13px] text-ink">{item.name}</p>
-                  <p className="truncate text-2xs text-ink-faint">{item.role}</p>
+                  <p className="truncate text-sm font-medium text-ink">{item.name}</p>
+                  <p className="readout truncate normal-case! tracking-normal!">{item.role}</p>
                 </div>
                 <Badge tone={state.tone} dot>{health ? state.label : 'Checking'}</Badge>
               </li>
@@ -126,8 +135,8 @@ const Overview = ({ threats, health, aiHealth, provider, onProviderChange, statu
           })}
           <li className="flex items-center justify-between gap-3 py-2 last:pb-0">
             <div className="min-w-0">
-              <p className="text-[13px] text-ink">AI classifier</p>
-              <p className="truncate text-2xs text-ink-faint">{aiModel || 'Rule engine only'}</p>
+              <p className="text-sm font-medium text-ink">AI classifier</p>
+              <p className="readout truncate normal-case! tracking-normal!">{aiModel || 'Rule engine only'}</p>
             </div>
             <Badge tone={ai.tone} dot>{ai.label}</Badge>
           </li>
@@ -138,14 +147,14 @@ const Overview = ({ threats, health, aiHealth, provider, onProviderChange, statu
           <select
             value={provider}
             onChange={(event) => onProviderChange(event.target.value)}
-            className="rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-xs text-ink"
+            className="border border-line-strong bg-canvas px-2.5 py-1.5 font-mono text-xs text-ink"
           >
             {AI_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
 
         {health && (
-          <p className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-2xs text-ink-faint">
+          <p className="readout mt-3 flex items-center gap-2 border-t border-dashed border-line-strong pt-3">
             <StatusDot tone={status === 'offline' ? 'crit' : 'ok'} />
             {usageTotal !== null && <span className="tabular">{usageTotal} provider calls today</span>}
             {health.cacheAge ? <span className="tabular">· cache {Math.round(health.cacheAge / 1000)}s old</span> : null}
