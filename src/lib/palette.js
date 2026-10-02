@@ -2,11 +2,14 @@
 // so tone classes are spelled out here rather than composed at runtime.
 
 export const CLASS_META = {
-  DDOS: { key: 'DDOS', label: 'DDoS', severity: 'Critical', color: '#ff6b6b', tone: 'crit', rank: 3 },
-  MALWARE: { key: 'MALWARE', label: 'Malware', severity: 'High', color: '#ffb454', tone: 'warn', rank: 2 },
-  SCAN: { key: 'SCAN', label: 'Scan', severity: 'Medium', color: '#5fd4a0', tone: 'ok', rank: 1 },
-  LOW: { key: 'LOW', label: 'Low risk', severity: 'Low', color: '#8f9ab3', tone: 'low', rank: 0 },
+  DDOS: { key: 'DDOS', label: 'DDoS', severity: 'Critical', color: '#ff3d6e', tone: 'crit', rank: 3 },
+  MALWARE: { key: 'MALWARE', label: 'Malware', severity: 'High', color: '#ffa826', tone: 'warn', rank: 2 },
+  SCAN: { key: 'SCAN', label: 'Scan', severity: 'Medium', color: '#5b8cff', tone: 'scan', rank: 1 },
+  LOW: { key: 'LOW', label: 'Low risk', severity: 'Low', color: '#7c8aa0', tone: 'low', rank: 0 },
 };
+
+// Chrome colours for canvas / SVG / WebGL consumers that cannot read CSS variables.
+export const CHROME = { info: '#5cf2e6', line: '#16233a', lineStrong: '#253957', inkMuted: '#8fa3ba', inkFaint: '#6f849c' };
 
 export const CLASS_ORDER = ['DDOS', 'MALWARE', 'SCAN', 'LOW'];
 
@@ -16,6 +19,7 @@ export const classMeta = (classification) =>
 export const TONE = {
   crit: { text: 'text-crit', soft: 'bg-crit/10', border: 'border-crit/30', solid: 'bg-crit', rule: 'border-l-crit' },
   warn: { text: 'text-warn', soft: 'bg-warn/10', border: 'border-warn/30', solid: 'bg-warn', rule: 'border-l-warn' },
+  scan: { text: 'text-scan', soft: 'bg-scan/10', border: 'border-scan/30', solid: 'bg-scan', rule: 'border-l-scan' },
   ok: { text: 'text-ok', soft: 'bg-ok/10', border: 'border-ok/30', solid: 'bg-ok', rule: 'border-l-ok' },
   info: { text: 'text-info', soft: 'bg-info/10', border: 'border-info/30', solid: 'bg-info', rule: 'border-l-info' },
   ai: { text: 'text-ai', soft: 'bg-ai/10', border: 'border-ai/30', solid: 'bg-ai', rule: 'border-l-ai' },
@@ -28,7 +32,7 @@ export const toneFor = (classification) => TONE[classMeta(classification).tone];
 // Hex → rgba string for canvas / WebGL consumers.
 export const withAlpha = (hex, alpha = 1) => {
   const match = /^#([a-f\d]{6})$/i.exec(String(hex || ''));
-  if (!match) return `rgba(143,154,179,${alpha})`;
+  if (!match) return `rgba(124,138,160,${alpha})`;
   const value = match[1];
   const r = parseInt(value.slice(0, 2), 16);
   const g = parseInt(value.slice(2, 4), 16);

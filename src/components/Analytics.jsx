@@ -3,26 +3,26 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { Activity, BarChart3 } from 'lucide-react';
 import { EmptyState, Panel } from './ui';
 import { useNow } from '../hooks/useNow';
-import { CLASS_META, CLASS_ORDER } from '../lib/palette';
+import { CHROME, CLASS_META, CLASS_ORDER } from '../lib/palette';
 
 const BUCKET_MS = 30 * 1000;
 const BUCKET_COUNT = 20;
-const AXIS_TICK = { fill: '#a0a0ab', fontSize: 11 };
+const AXIS_TICK = { fill: CHROME.inkFaint, fontSize: 11, fontFamily: 'JetBrains Mono Variable, monospace' };
 
 const ChartTooltip = ({ active, payload, label, unit = 'observations' }) => {
   if (!active || !payload?.length) return null;
   const rows = payload.filter((item) => item.value > 0);
   return (
-    <div className="rounded-lg border border-line-strong bg-overlay px-3 py-2 text-xs shadow-none">
-      <p className="mb-1 font-medium text-ink">{label}</p>
+    <div className="border border-line-strong border-l-2 border-l-info bg-canvas/95 px-3 py-2 text-xs">
+      <p className="readout mb-1 text-ink!">{label}</p>
       {rows.length === 0 && <p className="text-ink-muted">No {unit}</p>}
       {rows.map((item) => (
         <p key={item.dataKey} className="flex items-center justify-between gap-4 text-ink-muted">
           <span className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full" style={{ background: item.color || item.fill }} aria-hidden="true" />
+            <span className="size-2" style={{ background: item.color || item.fill }} aria-hidden="true" />
             {item.name}
           </span>
-          <span className="tabular text-ink">{item.value}</span>
+          <span className="font-mono tabular text-ink">{item.value}</span>
         </p>
       ))}
     </div>
@@ -53,10 +53,10 @@ export const ObservationsTimeline = ({ observations, className }) => {
 
   return (
     <Panel
-      title="Observations, last 10 minutes"
+      title="Observations, 10 min"
       icon={BarChart3}
       className={className}
-      bodyClassName="h-[calc(100%-44px)] min-h-[120px]"
+      bodyClassName="h-[calc(100%-41px)] min-h-[120px]"
     >
       {total === 0 ? (
         <EmptyState title="No observations yet" className="h-full py-2">Results appear here as threats are refreshed.</EmptyState>
@@ -64,10 +64,10 @@ export const ObservationsTimeline = ({ observations, className }) => {
         <div role="img" aria-label={`${total} threat observations in the last 10 minutes, grouped by severity`} className="h-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 4, right: 4, left: -22, bottom: 0 }} barCategoryGap={3}>
-              <CartesianGrid stroke="#26262b" vertical={false} />
-              <XAxis dataKey="tick" tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: '#26262b' }} interval={3} />
+              <CartesianGrid stroke={CHROME.line} strokeDasharray="2 4" vertical={false} />
+              <XAxis dataKey="tick" tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: CHROME.lineStrong }} interval={3} />
               <YAxis allowDecimals={false} tick={AXIS_TICK} tickLine={false} axisLine={false} />
-              <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+              <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(92,242,230,0.06)' }} />
               {[...CLASS_ORDER].reverse().map((key) => (
                 <Bar key={key} dataKey={key} name={CLASS_META[key].label} stackId="a" fill={CLASS_META[key].color} isAnimationActive={false} />
               ))}
@@ -97,7 +97,7 @@ export const ClassMix = ({ threats, className }) => {
       ) : (
         <>
           <div
-            className="flex h-2 overflow-hidden rounded-full bg-raised"
+            className="meter meter-track flex h-3"
             role="img"
             aria-label={CLASS_ORDER.map((key) => `${CLASS_META[key].label} ${counts[key]}`).join(', ')}
           >
@@ -105,16 +105,16 @@ export const ClassMix = ({ threats, className }) => {
               <div key={key} style={{ width: `${(counts[key] / total) * 100}%`, background: CLASS_META[key].color }} />
             ))}
           </div>
-          <ul className="mt-3 space-y-1.5">
+          <ul className="mt-3 space-y-2">
             {CLASS_ORDER.map((key) => (
               <li key={key} className="flex items-center justify-between text-[13px]">
                 <span className="flex items-center gap-2 text-ink-muted">
-                  <span className="size-2 rounded-full" style={{ background: CLASS_META[key].color }} aria-hidden="true" />
+                  <span className="size-2 rotate-45" style={{ background: CLASS_META[key].color }} aria-hidden="true" />
                   {CLASS_META[key].label}
                 </span>
-                <span className="tabular text-ink">
-                  {counts[key]}
-                  <span className="ml-1.5 text-ink-faint">{Math.round((counts[key] / total) * 100)}%</span>
+                <span className="font-mono text-xs tabular text-ink">
+                  {String(counts[key]).padStart(2, '0')}
+                  <span className="ml-2 inline-block w-9 text-right text-ink-faint">{Math.round((counts[key] / total) * 100)}%</span>
                 </span>
               </li>
             ))}
@@ -133,17 +133,17 @@ export const PhaseIntensity = ({ steps, stepIndex, onSelect, className }) => {
   }), [steps]);
 
   return (
-    <Panel title="Intensity by phase" icon={BarChart3} className={className} bodyClassName="h-[calc(100%-44px)] min-h-[120px]">
+    <Panel title="Intensity by phase" icon={BarChart3} className={className} bodyClassName="h-[calc(100%-41px)] min-h-[120px]">
       <div role="img" aria-label="Average simulated threat score for each scenario phase" className="h-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-            <CartesianGrid stroke="#26262b" vertical={false} />
-            <XAxis dataKey="index" tickFormatter={(value) => value + 1} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: '#26262b' }} />
+            <CartesianGrid stroke={CHROME.line} strokeDasharray="2 4" vertical={false} />
+            <XAxis dataKey="index" tickFormatter={(value) => value + 1} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: CHROME.lineStrong }} />
             <YAxis domain={[0, 100]} tick={AXIS_TICK} tickLine={false} axisLine={false} />
-            <Tooltip content={<ChartTooltip unit="data" />} labelFormatter={(value) => `Phase ${value + 1}`} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
-            <Bar dataKey="score" name="Avg score" radius={[3, 3, 0, 0]} isAnimationActive={false} onClick={(entry) => onSelect(entry.index)}>
+            <Tooltip content={<ChartTooltip unit="data" />} labelFormatter={(value) => `Phase ${value + 1}`} cursor={{ fill: 'rgba(92,242,230,0.06)' }} />
+            <Bar dataKey="score" name="Avg score" radius={0} isAnimationActive={false} onClick={(entry) => onSelect(entry.index)}>
               {data.map((entry) => (
-                <Cell key={entry.index} fill={entry.index === stepIndex ? '#6cb6ff' : '#383840'} cursor="pointer" />
+                <Cell key={entry.index} fill={entry.index === stepIndex ? CHROME.info : CHROME.lineStrong} cursor="pointer" />
               ))}
             </Bar>
           </BarChart>

@@ -30,9 +30,12 @@ const Clock = () => {
     return () => clearInterval(timer);
   }, []);
   return (
-    <time dateTime={now.toISOString()} className="hidden font-mono text-xs tabular text-ink-muted lg:block">
-      {now.toISOString().slice(11, 19)} UTC
-    </time>
+    <div className="hidden flex-col items-end leading-none lg:flex">
+      <span className="readout text-[10px]!">{now.toISOString().slice(0, 10)}</span>
+      <time dateTime={now.toISOString()} className="mt-1 font-mono text-sm tabular text-ink">
+        {now.toISOString().slice(11, 19)}<span className="ml-1 text-ink-faint">UTC</span>
+      </time>
+    </div>
   );
 };
 
@@ -41,7 +44,7 @@ export const ConnectionPill = ({ status, className }) => {
   return (
     <span
       role="status"
-      className={cn('inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-ink', className)}
+      className={cn('inline-flex items-center gap-2 border border-line-strong bg-canvas px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink', className)}
     >
       <StatusDot tone={meta.tone} pulse={meta.pulse} />
       {meta.label}
@@ -49,47 +52,54 @@ export const ConnectionPill = ({ status, className }) => {
   );
 };
 
+/** Wordmark glyph: a scope reticle with one hostile contact. */
+const Mark = () => (
+  <span className="hud grid size-9 shrink-0 place-items-center border border-line-strong bg-canvas" aria-hidden="true">
+    <svg viewBox="0 0 24 24" className="size-6" fill="none" strokeWidth="1.2">
+      <circle cx="12" cy="12" r="9" stroke="#253957" />
+      <circle cx="12" cy="12" r="5" stroke="#253957" />
+      <path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4" stroke="#5cf2e6" />
+      <path d="M12 12 18.4 5.6" stroke="#5cf2e6" strokeOpacity="0.6" />
+      <rect x="15.4" y="6.1" width="3" height="3" transform="rotate(45 16.9 7.6)" fill="#ff3d6e" />
+    </svg>
+  </span>
+);
+
 const Header = ({ mode, onModeChange, provider, onProviderChange, status }) => (
-  <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-canvas px-3 sm:px-5">
+  <header className="relative flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-canvas/95 px-3 sm:px-5">
     <div className="flex min-w-0 items-center gap-3">
-      <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface" aria-hidden="true">
-        <svg viewBox="0 0 24 24" className="size-[18px]" fill="none" stroke="currentColor" strokeWidth="1.6">
-          <circle cx="12" cy="12" r="8" className="text-ink-muted" />
-          <path d="M4 12h16M12 4c2.6 2.4 2.6 13.6 0 16M12 4c-2.6 2.4-2.6 13.6 0 16" className="text-ink-faint" />
-          <circle cx="18" cy="6" r="2.4" fill="#ff6b6b" stroke="none" />
-        </svg>
-      </span>
+      <Mark />
       <div className="min-w-0 leading-tight">
-        <h1 className="truncate text-sm font-semibold text-ink">Threat Globe</h1>
-        <p className="hidden truncate text-2xs text-ink-muted sm:block">Open-source threat intelligence</p>
+        <h1 className="sr-only truncate text-lg font-bold uppercase tracking-[0.14em] text-ink sm:not-sr-only">
+          Threat<span className="text-info">/</span>Globe
+        </h1>
+        <p className="readout hidden truncate sm:block">OSINT intercept console</p>
       </div>
     </div>
 
-    <Segmented
-      label="Data mode"
-      options={MODE_OPTIONS}
-      value={mode}
-      onChange={onModeChange}
-      size="sm"
-    />
+    <Segmented label="Data mode" options={MODE_OPTIONS} value={mode} onChange={onModeChange} size="sm" />
 
-    <div className="flex items-center justify-end gap-2.5 sm:gap-3.5">
-      <label className="hidden items-center gap-2 text-xs text-ink-muted md:flex">
-        <span>AI classifier</span>
+    <div className="flex items-center justify-end gap-3 sm:gap-4">
+      <label className="hidden items-center gap-2 md:flex">
+        <span className="readout">AI classifier</span>
         <select
           value={provider}
           onChange={(event) => onProviderChange(event.target.value)}
-          className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs text-ink transition-colors hover:border-line-strong"
+          className="border border-line-strong bg-canvas px-2.5 py-1.5 font-mono text-xs text-ink transition-colors hover:border-info/60"
         >
           {AI_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
       </label>
+      <span className="hidden h-8 w-px bg-line lg:block" aria-hidden="true" />
       <Clock />
       <ConnectionPill status={status} className="hidden sm:inline-flex" />
       <span className="sm:hidden"><StatusDot tone={(STATUS_META[status] || STATUS_META.connecting).tone} /></span>
     </div>
+
+    {/* Hazard strip under the command bar. */}
+    <span className="hatch pointer-events-none absolute inset-x-0 -bottom-[5px] h-1 opacity-60" aria-hidden="true" />
   </header>
 );
 

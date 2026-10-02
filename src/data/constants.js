@@ -1,3 +1,5 @@
+import { CLASS_META } from '../lib/palette';
+
 // Attack type classifications and color mappings
 // These are used by normalizers and the globe visualization
 
@@ -8,9 +10,9 @@ export const ATTACK_TYPES = {
 };
 
 export const COLOR_MAP = {
-  [ATTACK_TYPES.DDOS]: '#ff6b6b',
-  [ATTACK_TYPES.MALWARE]: '#ffb454',
-  [ATTACK_TYPES.SCAN]: '#5fd4a0'
+  [ATTACK_TYPES.DDOS]: CLASS_META.DDOS.color,
+  [ATTACK_TYPES.MALWARE]: CLASS_META.MALWARE.color,
+  [ATTACK_TYPES.SCAN]: CLASS_META.SCAN.color
 };
 
 let simIdCounter = 0;

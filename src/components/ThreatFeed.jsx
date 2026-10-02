@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Radar, RefreshCw, WifiOff } from 'lucide-react';
 import ThreatCard from './ThreatCard';
-import { EmptyState, Panel, Segmented, Skeleton } from './ui';
+import { CommandButton, EmptyState, Panel, Segmented, Skeleton } from './ui';
 import { CLASS_META } from '../lib/palette';
 
 export const FILTER_OPTIONS = [
@@ -51,7 +51,7 @@ const ThreatFeed = ({
       icon={Radar}
       className={className}
       bodyClassName="flex min-h-0 flex-1 flex-col gap-3 pb-3!"
-      action={<span className="text-xs tabular text-ink-muted" aria-live="polite">{visible.length} shown</span>}
+      action={<span className="readout tabular" aria-live="polite"><span className="text-info">{String(visible.length).padStart(2, '0')}</span> shown</span>}
     >
       <div className="-mx-1 overflow-x-auto px-1 scroll-thin">
         <Segmented label="Filter by severity" options={options} value={filter} onChange={onFilterChange} size="sm" />
@@ -69,13 +69,9 @@ const ThreatFeed = ({
             icon={WifiOff}
             title="Cannot reach the API"
             action={(
-              <button
-                type="button"
-                onClick={onRetry}
-                className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-3 py-1.5 text-xs font-medium text-ink hover:border-line-strong"
-              >
+              <CommandButton onClick={onRetry} className="mt-1">
                 <RefreshCw size={12} aria-hidden="true" /> Retry now
-              </button>
+              </CommandButton>
             )}
           >
             Start the server with <code className="font-mono text-ink">npm start</code> in <code className="font-mono text-ink">server/</code>.

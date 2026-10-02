@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Globe from 'globe.gl';
 import { feature } from 'topojson-client';
-import { classMeta, withAlpha } from '../lib/palette';
+import { CHROME, classMeta, withAlpha } from '../lib/palette';
 
 const MAX_LIVE_ARCS = 12;
 const SIM_REVEAL_STEP_MS = 140;
 const COUNTRIES_URL = '/textures/countries-110m.json';
 
-const SPHERE_COLOR = '#0d0d10';
-const LAND_COLOR = '#212127';
-const LAND_STROKE = '#3a3a44';
-const NODE_COLOR = '#6cb6ff';
+// Holographic chart: deep-water sphere, dark plate land, phosphor coastlines.
+const SPHERE_COLOR = '#050d18';
+const LAND_COLOR = '#0c1a2b';
+const LAND_STROKE = withAlpha(CHROME.info, 0.32);
+const NODE_COLOR = CHROME.info;
 
 const ID_TO_COUNTRY = {
   36: 'Australia', 76: 'Brazil', 124: 'Canada', 156: 'China', 170: 'Colombia',
@@ -71,7 +72,7 @@ const GlobeView = ({
   attacks,
   currentStep,
   highlightedCountries,
-  highlightColor = '#ff6b6b',
+  highlightColor = '#ff3d6e',
   isPlaying,
   onAttackClick,
   onHoverAttack,
@@ -121,8 +122,9 @@ const GlobeView = ({
       globe = Globe()(container)
         .backgroundColor('rgba(0,0,0,0)')
         .showAtmosphere(true)
-        .atmosphereColor('#3b3b46')
-        .atmosphereAltitude(0.09)
+        .atmosphereColor('#1d8a92')
+        .atmosphereAltitude(0.12)
+        .showGraticules(true)
         .width(container.clientWidth || 600)
         .height(container.clientHeight || 600);
     } catch {
@@ -361,22 +363,22 @@ const GlobeView = ({
 
   return (
     <div
-      className="relative h-full w-full overflow-hidden bg-canvas"
+      className="relative h-full w-full overflow-hidden"
       role="img"
       aria-label={`Globe showing ${arcs.length} threat route${arcs.length === 1 ? '' : 's'}`}
     >
       <div ref={containerRef} className="absolute inset-0" />
 
       {phase === 'loading' && (
-        <div className="absolute inset-0 grid place-items-center text-sm text-ink-muted" role="status">
-          Preparing globe…
+        <div className="readout absolute inset-0 grid place-items-center" role="status">
+          Acquiring globe…
         </div>
       )}
 
       {phase === 'unsupported' && (
         <div className="absolute inset-0 grid place-items-center p-6 text-center" role="alert">
-          <div className="max-w-sm rounded-xl border border-line bg-surface p-5">
-            <p className="text-sm font-medium text-ink">3D view unavailable</p>
+          <div className="hud max-w-sm border border-line bg-surface p-5">
+            <p className="text-sm font-semibold uppercase tracking-[0.06em] text-ink">3D view unavailable</p>
             <p className="mt-1 text-sm text-ink-muted">
               This browser could not start WebGL. The threat feed and charts still work.
             </p>
@@ -385,7 +387,7 @@ const GlobeView = ({
       )}
 
       {mapFailed && phase === 'ready' && (
-        <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-line bg-surface px-3 py-1 text-2xs text-ink-muted" role="status">
+        <p className="readout absolute bottom-3 left-1/2 -translate-x-1/2 border border-line bg-canvas px-3 py-1" role="status">
           Country outlines could not be loaded
         </p>
       )}
