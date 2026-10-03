@@ -1,59 +1,97 @@
-@import "@fontsource/chakra-petch/400.css";
-@import "@fontsource/chakra-petch/500.css";
-@import "@fontsource/chakra-petch/600.css";
-@import "@fontsource/chakra-petch/700.css";
-@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/archivo/wdth.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 @import "tailwindcss";
 
 /*
-  "Intercept" — a signals-intelligence console.
-  Surfaces are deep blue-black hulls on a faint plotting grid. Phosphor cyan (info) is the only
-  chrome colour: interactive, focused, live. Every other hue is a threat class or a status:
-  crit = DDoS / critical, warn = malware / high, scan = scanning / medium, low = benign,
-  ok = healthy source, ai = model-assisted output.
+  A printed briefing, not a cockpit. Neutral paper and ink carry the interface; the only hue is
+  the severity ramp (one vermilion hue, light to dark = low to critical), so colour always means
+  "threat". Corners are square everywhere; the one circle on the page is the live indicator.
+  The ramp and neutrals are mirrored in src/lib/palette.js for WebGL and SVG consumers.
 */
 @theme {
-  --font-sans: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", monospace;
+  --font-sans: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace;
 
-  --color-canvas: #03060b;
-  --color-surface: #08101a;
-  --color-raised: #0d1622;
-  --color-overlay: #122033;
-  --color-line: #16233a;
-  --color-line-strong: #253957;
+  --color-paper: #f3f3f0;
+  --color-sheet: #fafaf8;
+  --color-wash: #e8e8e4;
+  --color-rule: #d6d6d0;
+  --color-ink: #161615;
+  --color-ink-soft: #55554f;
+  --color-ink-mute: #6b6b65;
 
-  --color-ink: #dbe7f3;
-  --color-ink-muted: #8fa3ba;
-  --color-ink-faint: #6f849c;
+  --color-low: #d79b8e;
+  --color-med: #d4705b;
+  --color-high: #c6442b;
+  --color-crit: #a62407;
 
-  --color-crit: #ff3d6e;
-  --color-warn: #ffa826;
-  --color-scan: #5b8cff;
-  --color-ok: #3fe0a0;
-  --color-info: #5cf2e6;
-  --color-ai: #b18cff;
-  --color-low: #7c8aa0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
 
-  /* Machined, not pillowy: near-square corners everywhere. */
-  --radius-sm: 1px;
-  --radius-md: 2px;
-  --radius-lg: 2px;
-  --radius-xl: 3px;
-  --radius-2xl: 4px;
-
-  --text-2xs: 0.6875rem;
-  --text-2xs--line-height: 1rem;
-
-  --animate-live-dot: live-dot 2.4s ease-in-out infinite;
+  --animate-live: live 2.4s ease-in-out infinite;
 }
 
-@keyframes live-dot {
+/* Night edition: the same ramp re-stepped so the most severe class is the brightest mark. */
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-paper: #141413;
+    --color-sheet: #1c1c1a;
+    --color-wash: #252523;
+    --color-rule: #33332f;
+    --color-ink: #ecebe6;
+    --color-ink-soft: #b3b2ab;
+    --color-ink-mute: #8e8d86;
+    --color-low: #91655b;
+    --color-med: #c76c58;
+    --color-high: #ef755c;
+    --color-crit: #ff9077;
+    color-scheme: dark;
+  }
+}
+
+@media screen {
+  :root[data-theme="dark"] {
+    --color-paper: #141413;
+    --color-sheet: #1c1c1a;
+    --color-wash: #252523;
+    --color-rule: #33332f;
+    --color-ink: #ecebe6;
+    --color-ink-soft: #b3b2ab;
+    --color-ink-mute: #8e8d86;
+    --color-low: #91655b;
+    --color-med: #c76c58;
+    --color-high: #ef755c;
+    --color-crit: #ff9077;
+    color-scheme: dark;
+  }
+}
+
+@keyframes live {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  50% { opacity: 0.3; }
+}
+
+@utility condensed {
+  font-stretch: 72%;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-rule) transparent;
 }
 
 @layer base {
+  :root {
+    color-scheme: light;
+  }
+
   html,
   body,
   #root {
@@ -61,18 +99,12 @@
   }
 
   body {
-    background-color: var(--color-canvas);
-    /* Plotting grid: fine 24px cells inside 120px major cells. */
-    background-image:
-      linear-gradient(to right, color-mix(in srgb, var(--color-line) 55%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in srgb, var(--color-line) 55%, transparent) 1px, transparent 1px),
-      linear-gradient(to right, color-mix(in srgb, var(--color-line) 22%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in srgb, var(--color-line) 22%, transparent) 1px, transparent 1px);
-    background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+    background-color: var(--color-paper);
     color: var(--color-ink);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
+    transition: background-color 200ms ease, color 200ms ease;
   }
 
   button,
@@ -89,113 +121,31 @@
     cursor: pointer;
   }
 
-  select {
-    color-scheme: dark;
-  }
-
   :focus-visible {
-    outline: 1px solid var(--color-info);
+    outline: 2px solid var(--color-ink);
     outline-offset: 2px;
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--color-info) 30%, transparent);
+    background: var(--color-ink);
+    color: var(--color-paper);
   }
 }
 
-@layer components {
-  /* Corner registration ticks: top-left and bottom-right of any framed surface. */
-  .hud {
-    position: relative;
-  }
-
-  .hud::before,
-  .hud::after {
-    content: "";
-    position: absolute;
-    width: 9px;
-    height: 9px;
-    pointer-events: none;
-    border-color: color-mix(in srgb, var(--color-info) 75%, transparent);
-    border-style: solid;
-  }
-
-  .hud::before {
-    top: -1px;
-    left: -1px;
-    border-width: 1px 0 0 1px;
-  }
-
-  .hud::after {
-    right: -1px;
-    bottom: -1px;
-    border-width: 0 1px 1px 0;
-  }
-
-  /* Instrument label: small mono caps used for readouts, never for headings of prose. */
-  .readout {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    line-height: 1rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-ink-faint);
-  }
-
-  /* Segmented LED meter: colour comes from background-color, the mask cuts it into cells. */
-  .meter {
-    -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
-    mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
-  }
-
-  .meter-track {
-    background-color: var(--color-line);
-  }
-
-  /* Diagonal hazard hatching for header plates and dividers. */
-  .hatch {
-    background-image: repeating-linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--color-line-strong) 80%, transparent) 0 1px,
-      transparent 1px 6px
-    );
-  }
-
-  /* CRT scanlines over the globe stage. */
-  .scanlines {
-    background-image: repeating-linear-gradient(
-      to bottom,
-      rgba(140, 220, 255, 0.025) 0 1px,
-      transparent 1px 3px
-    );
-  }
-}
-
-@layer utilities {
-  .tabular {
-    font-variant-numeric: tabular-nums;
-  }
-
-  .scroll-thin {
-    scrollbar-width: thin;
-    scrollbar-color: var(--color-line-strong) transparent;
-  }
-}
-
-/* ── Globe tooltips (rendered as HTML strings by globe.gl) ── */
+/* ── Globe tooltips and labels (HTML strings rendered by globe.gl) ── */
 .scene-tooltip {
   pointer-events: none;
 }
 
 .globe-tip {
-  background: color-mix(in srgb, var(--color-canvas) 92%, transparent);
-  border: 1px solid var(--color-line-strong);
-  border-left: 2px solid var(--color-info);
-  padding: 10px 12px;
   min-width: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-ink);
+  background: var(--color-sheet);
+  box-shadow: 0 10px 28px -12px rgb(0 0 0 / 0.35);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
@@ -203,15 +153,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
-  margin-bottom: 6px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin-bottom: 4px;
+  font-size: 15px;
+  font-stretch: 72%;
+  font-weight: 700;
 }
 
-.globe-tip__dot {
-  width: 7px;
-  height: 7px;
+.globe-tip__key {
+  width: 10px;
+  height: 10px;
   flex: none;
 }
 
@@ -219,30 +169,33 @@
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  color: var(--color-ink-muted);
+  color: var(--color-ink-mute);
 }
 
 .globe-tip__row span:last-child {
   color: var(--color-ink);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .globe-tip__hint {
   margin-top: 6px;
-  color: var(--color-ink-faint);
-  font-size: 11px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-rule);
+  color: var(--color-ink-mute);
+  font-size: 11.5px;
 }
 
 .globe-label {
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--color-info) 45%, transparent);
-  background: color-mix(in srgb, var(--color-canvas) 88%, transparent);
-  color: var(--color-info);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  /* Sit above the point it names, so the label never covers where the routes meet. */
+  transform: translateY(-18px);
+  pointer-events: none;
+  padding: 1px 6px;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-stretch: 72%;
+  font-weight: 600;
   white-space: nowrap;
   /* opacity only: globe.gl positions labels with an inline transform that an animated transform would override */
   animation: fade-in 180ms ease-out;
@@ -251,6 +204,38 @@
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* Reports print as a plain document: everything except the open report is hidden. */
+@media print {
+  @page { margin: 16mm; }
+
+  body {
+    overflow: visible;
+    background: #fff;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  [data-print],
+  [data-print] * {
+    visibility: visible;
+  }
+
+  [data-print] {
+    position: absolute;
+    inset: 0 0 auto;
+    max-width: none !important;
+    max-height: none !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  [data-print-hide] {
+    display: none !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

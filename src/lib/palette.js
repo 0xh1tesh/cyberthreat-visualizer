@@ -1,38 +1,41 @@
-// Single source of truth for threat colours and tones. Tailwind needs literal class names,
-// so tone classes are spelled out here rather than composed at runtime.
+// Single source of truth for threat classes. Severity is ordinal, so the four classes share one
+// vermilion hue stepped from light (low) to dark (critical); validated per mode for monotone
+// lightness and a visible light end. Tailwind needs literal class names, so they are spelled out.
 
 export const CLASS_META = {
-  DDOS: { key: 'DDOS', label: 'DDoS', severity: 'Critical', color: '#ff3d6e', tone: 'crit', rank: 3 },
-  MALWARE: { key: 'MALWARE', label: 'Malware', severity: 'High', color: '#ffa826', tone: 'warn', rank: 2 },
-  SCAN: { key: 'SCAN', label: 'Scan', severity: 'Medium', color: '#5b8cff', tone: 'scan', rank: 1 },
-  LOW: { key: 'LOW', label: 'Low risk', severity: 'Low', color: '#7c8aa0', tone: 'low', rank: 0 },
+  DDOS: { key: 'DDOS', label: 'DDoS', severity: 'Critical', tone: 'crit', rank: 3, color: '#a62407' },
+  MALWARE: { key: 'MALWARE', label: 'Malware', severity: 'High', tone: 'high', rank: 2, color: '#c6442b' },
+  SCAN: { key: 'SCAN', label: 'Scan', severity: 'Medium', tone: 'med', rank: 1, color: '#d4705b' },
+  LOW: { key: 'LOW', label: 'Low risk', severity: 'Low', tone: 'low', rank: 0, color: '#d79b8e' },
 };
-
-// Chrome colours for canvas / SVG / WebGL consumers that cannot read CSS variables.
-export const CHROME = { info: '#5cf2e6', line: '#16233a', lineStrong: '#253957', inkMuted: '#8fa3ba', inkFaint: '#6f849c' };
 
 export const CLASS_ORDER = ['DDOS', 'MALWARE', 'SCAN', 'LOW'];
 
 export const classMeta = (classification) =>
   CLASS_META[String(classification || '').toUpperCase()] || CLASS_META.LOW;
 
-export const TONE = {
-  crit: { text: 'text-crit', soft: 'bg-crit/10', border: 'border-crit/30', solid: 'bg-crit', rule: 'border-l-crit' },
-  warn: { text: 'text-warn', soft: 'bg-warn/10', border: 'border-warn/30', solid: 'bg-warn', rule: 'border-l-warn' },
-  scan: { text: 'text-scan', soft: 'bg-scan/10', border: 'border-scan/30', solid: 'bg-scan', rule: 'border-l-scan' },
-  ok: { text: 'text-ok', soft: 'bg-ok/10', border: 'border-ok/30', solid: 'bg-ok', rule: 'border-l-ok' },
-  info: { text: 'text-info', soft: 'bg-info/10', border: 'border-info/30', solid: 'bg-info', rule: 'border-l-info' },
-  ai: { text: 'text-ai', soft: 'bg-ai/10', border: 'border-ai/30', solid: 'bg-ai', rule: 'border-l-ai' },
-  low: { text: 'text-low', soft: 'bg-low/10', border: 'border-low/30', solid: 'bg-low', rule: 'border-l-low' },
-  neutral: { text: 'text-ink-muted', soft: 'bg-raised', border: 'border-line', solid: 'bg-ink-faint', rule: 'border-l-line-strong' },
+export const SEVERITY_BG = { crit: 'bg-crit', high: 'bg-high', med: 'bg-med', low: 'bg-low' };
+
+// Mirrors the CSS tokens in global.css for canvas / SVG / WebGL consumers that cannot read them.
+export const THEMES = {
+  light: {
+    paper: '#f3f3f0', ink: '#161615', inkSoft: '#55554f', inkMute: '#6b6b65', rule: '#d6d6d0',
+    sea: '#e2e3df', land: '#f9f9f6', coast: 'rgba(22,22,21,0.42)', grid: 'rgba(22,22,21,0.08)',
+    crit: '#a62407', high: '#c6442b', med: '#d4705b', low: '#d79b8e',
+  },
+  dark: {
+    paper: '#141413', ink: '#ecebe6', inkSoft: '#b3b2ab', inkMute: '#8e8d86', rule: '#33332f',
+    sea: '#1a1a18', land: '#272725', coast: 'rgba(236,235,230,0.34)', grid: 'rgba(236,235,230,0.07)',
+    crit: '#ff9077', high: '#ef755c', med: '#c76c58', low: '#91655b',
+  },
 };
 
-export const toneFor = (classification) => TONE[classMeta(classification).tone];
+export const classColor = (classification, colors) => colors[classMeta(classification).tone];
 
 // Hex → rgba string for canvas / WebGL consumers.
 export const withAlpha = (hex, alpha = 1) => {
   const match = /^#([a-f\d]{6})$/i.exec(String(hex || ''));
-  if (!match) return `rgba(124,138,160,${alpha})`;
+  if (!match) return `rgba(124,124,118,${alpha})`;
   const value = match[1];
   const r = parseInt(value.slice(0, 2), 16);
   const g = parseInt(value.slice(2, 4), 16);

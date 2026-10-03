@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
-import { Radar, RefreshCw, WifiOff } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
+import { ArrowClockwiseIcon } from '@phosphor-icons/react';
 import ThreatCard from './ThreatCard';
-import { CommandButton, EmptyState, Panel, Segmented, Skeleton } from './ui';
+import { Button, EmptyState, Section, Skeleton, Tabs } from './ui';
 import { CLASS_META } from '../lib/palette';
 
 export const FILTER_OPTIONS = [
@@ -46,32 +47,35 @@ const ThreatFeed = ({
   const offlineEmpty = status === 'offline' && threats.length === 0;
 
   return (
-    <Panel
+    <Section
       title="Threat feed"
-      icon={Radar}
       className={className}
-      bodyClassName="flex min-h-0 flex-1 flex-col gap-3 pb-3!"
-      action={<span className="readout tabular" aria-live="polite"><span className="text-info">{String(visible.length).padStart(2, '0')}</span> shown</span>}
+      bodyClassName="flex min-h-0 flex-1 flex-col"
+      action={<span className="text-xs text-ink-mute tabular" aria-live="polite">{visible.length} shown, by score</span>}
     >
-      <div className="-mx-1 overflow-x-auto px-1 scroll-thin">
-        <Segmented label="Filter by severity" options={options} value={filter} onChange={onFilterChange} size="sm" />
+      <div className="scroll-thin overflow-x-auto">
+        <Tabs label="Filter by severity" options={options} value={filter} onChange={onFilterChange} />
       </div>
 
       <div className="scroll-thin -mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
         {connecting && (
-          <ul className="space-y-2" aria-label="Loading threats">
-            {[0, 1, 2, 3].map((i) => <li key={i}><Skeleton className="h-[108px]" /></li>)}
+          <ul className="divide-y divide-rule" aria-label="Loading threats">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <li key={i} className="grid grid-cols-[3rem_1fr] gap-3 px-2 py-3">
+                <Skeleton className="h-8" />
+                <div className="space-y-1.5"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>
+              </li>
+            ))}
           </ul>
         )}
 
         {offlineEmpty && (
           <EmptyState
-            icon={WifiOff}
             title="Cannot reach the API"
             action={(
-              <CommandButton onClick={onRetry} className="mt-1">
-                <RefreshCw size={12} aria-hidden="true" /> Retry now
-              </CommandButton>
+              <Button onClick={onRetry}>
+                <ArrowClockwiseIcon size={13} aria-hidden="true" /> Retry now
+              </Button>
             )}
           >
             Start the server with <code className="font-mono text-ink">npm start</code> in <code className="font-mono text-ink">server/</code>.
@@ -79,32 +83,32 @@ const ThreatFeed = ({
         )}
 
         {!connecting && !offlineEmpty && visible.length === 0 && (
-          <EmptyState icon={Radar} title={filter === 'ALL' ? 'No threats yet' : 'Nothing in this category'}>
-            {filter === 'ALL'
-              ? 'New threats appear after the next refresh.'
-              : 'Try a different severity filter.'}
+          <EmptyState title={filter === 'ALL' ? 'No threats yet' : 'Nothing in this category'}>
+            {filter === 'ALL' ? 'New threats appear after the next refresh.' : 'Try a different severity filter.'}
           </EmptyState>
         )}
 
         {visible.length > 0 && (
-          <ul className="space-y-2" aria-label="Threats">
-            {visible.map((threat) => (
-              <ThreatCard
-                key={threat.id}
-                threat={threat}
-                selected={threat.id === selectedId}
-                hovered={threat.id === hoveredId}
-                analysis={analysisStates[threat.id]}
-                onSelect={onSelect}
-                onHover={onHover}
-                onReport={onReport}
-                onAnalyze={onAnalyze}
-              />
-            ))}
+          <ul className="divide-y divide-rule" aria-label="Threats">
+            <AnimatePresence initial={false}>
+              {visible.map((threat) => (
+                <ThreatCard
+                  key={threat.id}
+                  threat={threat}
+                  selected={threat.id === selectedId}
+                  hovered={threat.id === hoveredId}
+                  analysis={analysisStates[threat.id]}
+                  onSelect={onSelect}
+                  onHover={onHover}
+                  onReport={onReport}
+                  onAnalyze={onAnalyze}
+                />
+              ))}
+            </AnimatePresence>
           </ul>
         )}
       </div>
-    </Panel>
+    </Section>
   );
 };
 

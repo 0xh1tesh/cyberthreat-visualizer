@@ -1,17 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Globe from 'globe.gl';
+import { BackSide, Mesh, MeshBasicMaterial, SphereGeometry } from 'three';
 import { feature } from 'topojson-client';
-import { CHROME, classMeta, withAlpha } from '../lib/palette';
+import { classColor, classMeta, withAlpha } from '../lib/palette';
 
 const MAX_LIVE_ARCS = 12;
 const SIM_REVEAL_STEP_MS = 140;
 const COUNTRIES_URL = '/textures/countries-110m.json';
 
-// Holographic chart: deep-water sphere, dark plate land, phosphor coastlines.
-const SPHERE_COLOR = '#050d18';
-const LAND_COLOR = '#0c1a2b';
-const LAND_STROKE = withAlpha(CHROME.info, 0.32);
-const NODE_COLOR = CHROME.info;
+// A printed atlas: flat sea, paper land, ink coastlines and a 15° graticule (drawn as paths so it
+// can follow the theme; globe.gl's built-in graticule colour is fixed).
+const GRATICULE = [
+  ...Array.from({ length: 24 }, (_, i) => Array.from({ length: 33 }, (__, j) => [-80 + j * 5, -180 + i * 15])),
+  ...Array.from({ length: 11 }, (_, i) => Array.from({ length: 73 }, (__, j) => [-75 + i * 15, -180 + j * 5])),
+];
 
 const ID_TO_COUNTRY = {
   36: 'Australia', 76: 'Brazil', 124: 'Canada', 156: 'China', 170: 'Colombia',
@@ -53,18 +55,19 @@ const prefersReducedMotion = () =>
   typeof window !== 'undefined'
   && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
-const arcTooltip = (arc) => {
+const arcTooltip = (arc, colors) => {
   const meta = classMeta(arc.classification);
   return `
     <div class="globe-tip">
       <div class="globe-tip__title">
-        <span class="globe-tip__dot" style="background:${meta.color}"></span>
-        ${escapeHtml(meta.label)} · ${escapeHtml(Math.round(arc.score))}/100
+        <span class="globe-tip__key" style="background:${classColor(arc.classification, colors)}"></span>
+        ${escapeHtml(arc.sourceCountry)}
       </div>
-      <div class="globe-tip__row"><span>Origin</span><span>${escapeHtml(arc.sourceCountry)}</span></div>
+      <div class="globe-tip__row"><span>Class</span><span>${escapeHtml(meta.label)}</span></div>
+      <div class="globe-tip__row"><span>Score</span><span>${escapeHtml(Math.round(arc.score))} of 100</span></div>
       <div class="globe-tip__row"><span>Destination</span><span>${escapeHtml(arc.targetCountry)}</span></div>
       ${arc.sourceIp ? `<div class="globe-tip__row"><span>IP</span><span>${escapeHtml(arc.sourceIp)}</span></div>` : ''}
-      <div class="globe-tip__hint">Select for the full report</div>
+      <div class="globe-tip__hint">Select the route for its full report</div>
     </div>`;
 };
 
@@ -72,7 +75,7 @@ const GlobeView = ({
   attacks,
   currentStep,
   highlightedCountries,
-  highlightColor = '#ff3d6e',
+  colors,
   isPlaying,
   onAttackClick,
   onHoverAttack,
@@ -81,15 +84,16 @@ const GlobeView = ({
 }) => {
   const containerRef = useRef(null);
   const globeRef = useRef(null);
+  const outlineRef = useRef(null);
   const interaction = useRef({ hovering: false, dragging: false });
-  const latest = useRef({ isPlaying, currentStep, onAttackClick, onHoverAttack });
+  const latest = useRef({ isPlaying, currentStep, onAttackClick, onHoverAttack, colors });
   const [phase, setPhase] = useState('loading');
   const [countries, setCountries] = useState([]);
   const [mapFailed, setMapFailed] = useState(false);
   const [reveal, setReveal] = useState({ stepId: null, count: null });
 
   useEffect(() => {
-    latest.current = { isPlaying, currentStep, onAttackClick, onHoverAttack };
+    latest.current = { isPlaying, currentStep, onAttackClick, onHoverAttack, colors };
   });
 
   const arcs = useMemo(() => {
@@ -121,24 +125,17 @@ const GlobeView = ({
     try {
       globe = Globe()(container)
         .backgroundColor('rgba(0,0,0,0)')
-        .showAtmosphere(true)
-        .atmosphereColor('#1d8a92')
-        .atmosphereAltitude(0.12)
-        .showGraticules(true)
+        .showAtmosphere(false)
+        .showGraticules(false)
+        .globeMaterial(new MeshBasicMaterial({ color: latest.current.colors.sea }))
+        .pathsData(GRATICULE)
+        .pathTransitionDuration(0)
         .width(container.clientWidth || 600)
         .height(container.clientHeight || 600);
     } catch {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- WebGL init is an external system; report its failure
       setPhase('unsupported');
       return undefined;
-    }
-
-    const material = globe.globeMaterial();
-    if (material) {
-      material.color?.set(SPHERE_COLOR);
-      material.emissive?.set(SPHERE_COLOR);
-      material.emissiveIntensity = 1;
-      material.shininess = 0;
     }
 
     const renderer = globe.renderer?.();
@@ -156,7 +153,15 @@ const GlobeView = ({
     controls.addEventListener('start', onStart);
     controls.addEventListener('end', onEnd);
 
-    globe.pointOfView({ lat: 22, lng: 10, altitude: 2.1 });
+    globe.pointOfView({ lat: 22, lng: 10, altitude: 1.6 });
+    // An ink rim: a slightly larger back-faced sphere shows only at the silhouette.
+    const outline = new Mesh(
+      new SphereGeometry(globe.getGlobeRadius() * 1.005, 96, 64),
+      new MeshBasicMaterial({ color: latest.current.colors.ink, side: BackSide }),
+    );
+    globe.scene().add(outline);
+    outlineRef.current = outline;
+
     globeRef.current = globe;
     applyRotation();
     setPhase('ready');
@@ -173,12 +178,25 @@ const GlobeView = ({
       controls.removeEventListener('end', onEnd);
       globeRef.current = null;
       globe.pauseAnimation?.();
+      globe.globeMaterial()?.dispose?.();
+      outline.geometry.dispose();
+      outline.material.dispose();
+      outlineRef.current = null;
       renderer?.dispose?.();
       globe._destructor?.();
     };
   }, []);
 
   useEffect(applyRotation, [isPlaying, currentStep]);
+
+  // ── Theme: sea and graticule ──
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+    globe.globeMaterial()?.color?.set(colors.sea);
+    outlineRef.current?.material.color.set(colors.ink);
+    globe.pathColor(() => colors.grid);
+  }, [colors, phase]);
 
   // ── Country outlines (vendored locally) ──
   useEffect(() => {
@@ -206,9 +224,9 @@ const GlobeView = ({
     globe
       .polygonsData(countries)
       .polygonAltitude(0.004)
-      .polygonCapColor((f) => (affected.has(getCountryName(f).toLowerCase()) ? withAlpha(highlightColor, 0.3) : LAND_COLOR))
+      .polygonCapColor((f) => (affected.has(getCountryName(f).toLowerCase()) ? withAlpha(colors.high, 0.32) : colors.land))
       .polygonSideColor(() => 'rgba(0,0,0,0)')
-      .polygonStrokeColor(() => LAND_STROKE)
+      .polygonStrokeColor(() => colors.coast)
       .polygonLabel((f) => {
         const name = getCountryName(f);
         return `<div class="globe-tip"><div class="globe-tip__title">${escapeHtml(name)}</div>${
@@ -217,7 +235,7 @@ const GlobeView = ({
       })
       .onPolygonHover((f) => { interaction.current.hovering = Boolean(f); applyRotation(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [countries, highlightKey, highlightColor, phase, Boolean(currentStep)]);
+  }, [countries, highlightKey, colors, phase, Boolean(currentStep)]);
 
   // ── Simulation: reveal arcs one by one ──
   const stepId = currentStep?.id ?? null;
@@ -250,19 +268,19 @@ const GlobeView = ({
       .arcEndLng('targetLng')
       .arcColor((arc) => {
         const dimmed = activeId && arc.id !== activeId;
-        return withAlpha(classMeta(arc.classification).color, dimmed ? 0.18 : 0.85);
+        return withAlpha(classColor(arc.classification, colors), dimmed ? 0.16 : 0.92);
       })
       .arcStroke((arc) => {
-        const base = 0.3 + ((arc.score || 0) / 100) * 0.3;
-        return arc.id === activeId ? base * 1.6 : base;
+        const base = 0.28 + ((arc.score || 0) / 100) * 0.3;
+        return arc.id === activeId ? base * 1.7 : base;
       })
       .arcAltitude((arc) => 0.16 + hashToUnit(arc.id) * 0.08 + ((arc.intensity || 5) / 10) * 0.06)
       .arcCurveResolution(48)
-      .arcDashLength(reduced ? 1 : 0.42)
-      .arcDashGap(reduced ? 0 : 0.18)
-      .arcDashAnimateTime(reduced ? 0 : 2600)
+      .arcDashLength(reduced ? 1 : 0.5)
+      .arcDashGap(reduced ? 0 : 0.12)
+      .arcDashAnimateTime(reduced ? 0 : 3200)
       .arcsTransitionDuration(reduced ? 0 : 500)
-      .arcLabel(arcTooltip)
+      .arcLabel((arc) => arcTooltip(arc, colors))
       .onArcHover((arc) => {
         interaction.current.hovering = Boolean(arc);
         applyRotation();
@@ -275,14 +293,14 @@ const GlobeView = ({
     const sourcePoints = visibleArcs.map((arc) => ({
       lat: arc.sourceLat,
       lng: arc.sourceLng,
-      color: withAlpha(classMeta(arc.classification).color, arc.id === activeId || !activeId ? 1 : 0.3),
-      size: arc.id === activeId ? 0.34 : 0.22,
+      color: withAlpha(classColor(arc.classification, colors), arc.id === activeId || !activeId ? 1 : 0.3),
+      size: arc.id === activeId ? 0.36 : 0.22,
       label: `<div class="globe-tip"><div class="globe-tip__title">${escapeHtml(arc.sourceCountry)}</div>${
         arc.sourceCity && arc.sourceCity !== 'Unknown' ? `<div class="globe-tip__row"><span>City</span><span>${escapeHtml(arc.sourceCity)}</span></div>` : ''
       }</div>`,
     }));
     const nodePoints = monitoringNode
-      ? [{ lat: monitoringNode.lat, lng: monitoringNode.lng, color: NODE_COLOR, size: 0.3, label: '<div class="globe-tip"><div class="globe-tip__title">Monitoring node</div><div class="globe-tip__row"><span>Note</span><span>Victims are not observable</span></div></div>' }]
+      ? [{ lat: monitoringNode.lat, lng: monitoringNode.lng, color: colors.ink, size: 0.3, label: '<div class="globe-tip"><div class="globe-tip__title">Monitoring node</div><div class="globe-tip__hint">The feeds cannot see victims, so every route ends here.</div></div>' }]
       : [];
 
     globe
@@ -296,8 +314,8 @@ const GlobeView = ({
       .onPointHover((point) => { interaction.current.hovering = Boolean(point); applyRotation(); });
 
     const ringTargets = currentStep
-      ? visibleArcs.slice(-4).map((arc) => ({ lat: arc.targetLat, lng: arc.targetLng, color: classMeta(arc.classification).color }))
-      : monitoringNode ? [{ lat: monitoringNode.lat, lng: monitoringNode.lng, color: NODE_COLOR }] : [];
+      ? visibleArcs.slice(-4).map((arc) => ({ lat: arc.targetLat, lng: arc.targetLng, color: classColor(arc.classification, colors) }))
+      : monitoringNode ? [{ lat: monitoringNode.lat, lng: monitoringNode.lng, color: colors.ink }] : [];
 
     globe
       .ringsData(reduced ? [] : ringTargets)
@@ -306,15 +324,30 @@ const GlobeView = ({
       .ringPropagationSpeed(currentStep ? 2.2 : 1.4)
       .ringRepeatPeriod(currentStep ? 1400 : 2600);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arcs, revealCount, hoveredId, selectedId, monitoringNode, phase, currentStep?.id]);
+  }, [arcs, revealCount, hoveredId, selectedId, monitoringNode, phase, currentStep?.id, colors]);
 
-  // ── Country labels (simulation) ──
+  // ── Labels: affected countries in a replay, the monitoring node when live ──
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe) return;
 
+    // globe.gl owns the outer element's transform, so the offset lives on an inner node.
+    const element = (label) => {
+      const el = document.createElement('div');
+      const tag = document.createElement('div');
+      tag.className = 'globe-label';
+      tag.textContent = label.name;
+      el.appendChild(tag);
+      return el;
+    };
+
     if (!currentStep?.affectedRegions?.length) {
-      globe.htmlElementsData([]);
+      globe
+        .htmlElementsData(monitoringNode ? [{ name: 'Monitoring node', ...monitoringNode }] : [])
+        .htmlLat('lat')
+        .htmlLng('lng')
+        .htmlAltitude(0.02)
+        .htmlElement(element);
       return;
     }
 
@@ -335,13 +368,8 @@ const GlobeView = ({
       .htmlLat('lat')
       .htmlLng('lng')
       .htmlAltitude(0.05)
-      .htmlElement((label) => {
-        const el = document.createElement('div');
-        el.className = 'globe-label';
-        el.textContent = label.name;
-        return el;
-      });
-  }, [currentStep, phase]);
+      .htmlElement(element);
+  }, [currentStep, monitoringNode, phase]);
 
   // ── Camera ──
   useEffect(() => {
@@ -370,16 +398,16 @@ const GlobeView = ({
       <div ref={containerRef} className="absolute inset-0" />
 
       {phase === 'loading' && (
-        <div className="readout absolute inset-0 grid place-items-center" role="status">
-          Acquiring globe…
+        <div className="absolute inset-0 grid place-items-center text-[13px] text-ink-mute" role="status">
+          Loading the globe
         </div>
       )}
 
       {phase === 'unsupported' && (
         <div className="absolute inset-0 grid place-items-center p-6 text-center" role="alert">
-          <div className="hud max-w-sm border border-line bg-surface p-5">
-            <p className="text-sm font-semibold uppercase tracking-[0.06em] text-ink">3D view unavailable</p>
-            <p className="mt-1 text-sm text-ink-muted">
+          <div className="max-w-sm border-t-2 border-ink pt-3 text-left">
+            <p className="condensed text-lg font-bold text-ink">3D view unavailable</p>
+            <p className="mt-1 text-sm text-ink-soft">
               This browser could not start WebGL. The threat feed and charts still work.
             </p>
           </div>
@@ -387,7 +415,7 @@ const GlobeView = ({
       )}
 
       {mapFailed && phase === 'ready' && (
-        <p className="readout absolute bottom-3 left-1/2 -translate-x-1/2 border border-line bg-canvas px-3 py-1" role="status">
+        <p className="absolute top-14 left-1/2 -translate-x-1/2 bg-wash px-3 py-1 text-xs text-ink-soft" role="status">
           Country outlines could not be loaded
         </p>
       )}
