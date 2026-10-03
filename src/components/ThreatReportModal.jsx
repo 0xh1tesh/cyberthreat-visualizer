@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AlertCircle, Check, Copy, ExternalLink, Loader2, Sparkles, X } from 'lucide-react';
-import { Badge, IconButton } from './ui';
+import { ArrowUpRightIcon, CheckIcon, CircleNotchIcon, CopyIcon, PrinterIcon, WarningIcon, XIcon } from '@phosphor-icons/react';
+import { Button, IconButton, Swatch, Tag } from './ui';
 import { cn } from '../lib/utils';
 import { apiFetch, describeApiError, isAbortError } from '../lib/api';
-import { classMeta, TONE } from '../lib/palette';
+import { classMeta } from '../lib/palette';
 import { getSignalDisplayMeta } from '../lib/threat-normalize';
 
 const SUMMARY_TTL_MS = 7 * 60 * 1000;
@@ -17,7 +17,7 @@ const MITRE_MAP = {
   LOW: { id: 'T1595', name: 'Active Scanning' },
 };
 
-const RISK_TONE = { HIGH: 'text-crit', MEDIUM: 'text-warn', LOW: 'text-ok' };
+const RISK_LABEL = { HIGH: 'High risk', MEDIUM: 'Medium risk', LOW: 'Low risk' };
 
 const cacheKey = (ip, provider) => `${ip}|${provider}`;
 
@@ -42,22 +42,22 @@ const buildRuleReasoning = (classification, signals, sources) => {
   return `Classified as ${classMeta(classification).label} from ${parts.join(', ')}.`;
 };
 
-const Section = ({ title, children, action }) => (
-  <section className="space-y-3">
-    <div className="flex items-center justify-between gap-3">
-      <h3 className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-[0.08em] text-ink"><span className="size-1.5 rotate-45 bg-info" aria-hidden="true" />{title}</h3>
+const Block = ({ title, children, action }) => (
+  <section className="border-t border-ink pt-3">
+    <div className="mb-3 flex min-h-7 items-center justify-between gap-3">
+      <h3 className="condensed text-[17px] font-bold text-ink">{title}</h3>
       {action}
     </div>
     {children}
   </section>
 );
 
-const SignalTile = ({ label, meta }) => (
-  <div className="border border-line border-t-2 border-t-line-strong bg-canvas p-3" title={meta.tooltip || undefined}>
-    <p className="readout">{label}</p>
-    <p className={cn('mt-1 font-mono text-lg font-semibold tabular', meta.faded ? 'text-ink-faint' : 'text-ink')}>
+const SignalFigure = ({ label, meta }) => (
+  <div className="min-w-0" title={meta.tooltip || undefined}>
+    <dt className="text-xs text-ink-mute">{label}</dt>
+    <dd className={cn('condensed mt-0.5 font-semibold tabular', meta.faded ? 'text-lg text-ink-mute' : 'text-[30px] leading-8 text-ink')}>
       {meta.faded ? 'Unavailable' : meta.text}
-    </p>
+    </dd>
   </div>
 );
 
@@ -75,7 +75,6 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
 
   const canSummarize = Boolean(ip) && !threat.synthetic;
   const meta = classMeta(threat.classification);
-  const tone = TONE[meta.tone];
 
   const abortRequest = useCallback(() => {
     requestRef.current?.abort();
@@ -193,150 +192,153 @@ const ReportDialog = ({ threat, onClose, aiProvider }) => {
   const ports = getSignalDisplayMeta(threat.signals?.portExposure, 'shodan', threat.sources);
 
   return (
-        <motion.div
-          className="fixed inset-0 z-50 grid place-items-end bg-black/70 sm:place-items-center sm:p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-          onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
-        >
-          <motion.div
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 16 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="hud flex max-h-[100dvh] w-full flex-col overflow-hidden border border-line-strong bg-surface sm:max-h-[86vh] sm:max-w-2xl"
-          >
-            <header className="flex items-start justify-between gap-4 border-b border-line bg-canvas/60 px-5 py-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 id={titleId} className="text-lg font-bold uppercase tracking-[0.1em] text-ink">Threat report</h2>
-                  <Badge tone={meta.tone}>{meta.label}</Badge>
-                  {threat.synthetic && <Badge tone="info">Simulated</Badge>}
-                </div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
-                  <span className="text-sm font-medium text-ink">{threat.origin.country}</span>
-                  {ip && (
-                    <button
-                      type="button"
-                      onClick={copyIp}
-                      className="inline-flex items-center gap-1.5 font-mono text-ink hover:text-info"
-                      aria-label={`Copy IP address ${ip}`}
-                    >
-                      {ip}
-                      {copied ? <Check size={12} className="text-ok" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-                    </button>
-                  )}
-                  <time className="font-mono tabular" dateTime={threat.timestamp.toISOString()}>{threat.timestamp.toLocaleString()}</time>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-start gap-3">
-                <div className="text-right">
-                  <p className={cn('font-mono text-4xl font-semibold leading-9 tabular', tone.text)}>{Math.round(threat.score)}</p>
-                  <p className="readout">Threat score</p>
-                </div>
-                <IconButton label="Close report" onClick={onClose} data-autofocus>
-                  <X size={15} aria-hidden="true" />
-                </IconButton>
-              </div>
-            </header>
+    <motion.div
+      className="fixed inset-0 z-50 grid place-items-end bg-ink/45 sm:place-items-center sm:p-6 print:static print:block print:bg-transparent"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <motion.div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        data-print
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 24 }}
+        transition={{ type: 'spring', stiffness: 420, damping: 38 }}
+        className="flex max-h-[100dvh] w-full flex-col overflow-hidden border-t-[6px] border-ink bg-sheet shadow-[0_32px_80px_-24px_rgb(0_0_0/0.45)] sm:max-h-[88vh] sm:max-w-2xl"
+      >
+        <header className="px-6 pt-4 sm:px-8">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-ink-mute">
+              Threat report, <time className="tabular" dateTime={threat.timestamp.toISOString()}>{threat.timestamp.toLocaleString()}</time>
+            </p>
+            <div className="-mr-2 flex items-center" data-print-hide>
+              <IconButton label="Print report" onClick={() => window.print()}>
+                <PrinterIcon size={17} aria-hidden="true" />
+              </IconButton>
+              <IconButton label="Close report" onClick={onClose} data-autofocus>
+                <XIcon size={17} aria-hidden="true" />
+              </IconButton>
+            </div>
+          </div>
 
-            <div className="scroll-thin min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
-              <Section title="Signals">
-                <div className="grid grid-cols-3 gap-3">
-                  <SignalTile label="Abuse score" meta={abuse} />
-                  <SignalTile label="OTX hits" meta={otx} />
-                  <SignalTile label="Open ports" meta={ports} />
-                </div>
-              </Section>
-
-              <Section
-                title="AI incident summary"
-                action={canSummarize && !summary && status !== 'error' && (
+          <div className="mt-2 flex items-end justify-between gap-6 border-b border-ink pb-5">
+            <div className="min-w-0">
+              <h2 id={titleId} className="condensed text-[44px] leading-[0.95] font-extrabold tracking-[-0.015em] text-ink">
+                <span className="sr-only">Threat report: </span>{threat.origin.country}
+              </h2>
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-ink">
+                  <Swatch classification={threat.classification} />
+                  {meta.label}, {meta.severity.toLowerCase()} severity
+                </span>
+                {ip && (
                   <button
                     type="button"
-                    onClick={generate}
-                    disabled={status === 'loading'}
-                    className="inline-flex items-center gap-1.5 border border-ai/40 bg-ai/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ai transition-colors hover:bg-ai/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={copyIp}
+                    className="inline-flex items-center gap-1.5 font-mono text-[12.5px] text-ink-soft transition-colors hover:text-ink"
+                    aria-label={`Copy IP address ${ip}`}
                   >
-                    {status === 'loading' ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Sparkles size={13} className="text-ai" aria-hidden="true" />}
-                    {status === 'loading' ? 'Generating' : 'Generate summary'}
+                    {ip}
+                    {copied ? <CheckIcon size={13} weight="bold" aria-hidden="true" /> : <CopyIcon size={13} aria-hidden="true" />}
                   </button>
                 )}
-              >
-                {!canSummarize && (
-                  <p className="rounded-lg border border-line bg-canvas p-4 text-[13px] text-ink-muted">
-                    AI summaries are only available for live threats with a real source IP.
-                  </p>
-                )}
-
-                {canSummarize && !summary && status !== 'error' && (
-                  <p className="rounded-lg border border-line bg-canvas p-4 text-[13px] text-ink-muted" aria-live="polite">
-                    {status === 'loading' ? 'Asking the model for an incident summary…' : 'No summary generated yet.'}
-                  </p>
-                )}
-
-                {status === 'error' && (
-                  <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-warn/30 bg-warn/10 p-4">
-                    <span className="flex items-center gap-2 text-[13px] text-warn">
-                      <AlertCircle size={15} aria-hidden="true" /> {error}
-                    </span>
-                    <button type="button" onClick={generate} className="rounded-md border border-warn/40 px-2.5 py-1 text-xs font-medium text-warn hover:bg-warn/10">
-                      Retry
-                    </button>
-                  </div>
-                )}
-
-                {summary && (
-                  <div className="space-y-4 rounded-lg border border-ai/30 bg-ai/5 p-4">
-                    <div className="flex items-center gap-2">
-                      <Badge tone="ai"><Sparkles size={11} aria-hidden="true" /> {summary.provider}</Badge>
-                      <span className={cn('text-xs font-medium', RISK_TONE[summary.risk] || 'text-warn')}>{summary.risk} risk</span>
-                    </div>
-                    {[['Assessment', summary.assessment], ['Technical analysis', summary.technical], ['Recommended action', summary.action]]
-                      .filter(([, text]) => text)
-                      .map(([label, text]) => (
-                        <div key={label}>
-                          <p className="readout">{label}</p>
-                          <p className="mt-1 text-[13px] leading-6 text-ink">{text}</p>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </Section>
-
-              <Section title="Classification">
-                <div className="space-y-3 rounded-lg border border-line bg-canvas p-4 text-[13px]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-ink-muted">Method</span>
-                    <span className="text-ink">{threat.ai?.used ? 'AI-assisted' : 'Rule engine'}</span>
-                  </div>
-                  {threat.ai?.used && threat.ai.confidence > 0 && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-ink-muted">Model confidence</span>
-                      <span className="tabular text-ink">{Math.round(threat.ai.confidence)}%</span>
-                    </div>
-                  )}
-                  <p className="border-t border-line pt-3 leading-6 text-ink-muted">{reasoning}</p>
-                </div>
-                <a
-                  href={`https://attack.mitre.org/techniques/${mitre.id}/`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-md border border-line px-2.5 py-1.5 font-mono text-xs text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
-                >
-                  MITRE ATT&amp;CK {mitre.id} · {mitre.name}
-                  <ExternalLink size={12} aria-hidden="true" />
-                </a>
-              </Section>
+                {threat.synthetic && <Tag>Simulated</Tag>}
+              </div>
             </div>
-          </motion.div>
-        </motion.div>
+            <div className="shrink-0 text-right">
+              <p className={cn('condensed text-[72px] leading-[0.8] font-extrabold tabular', meta.rank === 3 ? 'text-crit' : 'text-ink')}>
+                {Math.round(threat.score)}
+              </p>
+              <p className="mt-1.5 text-xs text-ink-mute">score out of 100</p>
+            </div>
+          </div>
+        </header>
+
+        <div className="scroll-thin min-h-0 flex-1 space-y-7 overflow-y-auto px-6 pt-5 pb-7 sm:px-8 print:overflow-visible">
+          <dl className="grid grid-cols-3 divide-x divide-rule [&>div]:px-4 [&>div:first-child]:pl-0">
+            <SignalFigure label="AbuseIPDB score" meta={abuse} />
+            <SignalFigure label="OTX pulse hits" meta={otx} />
+            <SignalFigure label="Open ports" meta={ports} />
+          </dl>
+
+          <Block
+            title="Incident summary"
+            action={canSummarize && !summary && status !== 'error' && (
+              <span data-print-hide>
+                <Button variant="solid" onClick={generate} disabled={status === 'loading'}>
+                  {status === 'loading' && <CircleNotchIcon size={13} className="animate-spin" aria-hidden="true" />}
+                  {status === 'loading' ? 'Generating' : 'Generate summary'}
+                </Button>
+              </span>
+            )}
+          >
+            {!canSummarize && (
+              <p className="text-[13.5px] text-ink-mute">
+                AI summaries are only available for live threats with a real source IP.
+              </p>
+            )}
+
+            {canSummarize && !summary && status !== 'error' && (
+              <p className="text-[13.5px] text-ink-mute" aria-live="polite">
+                {status === 'loading' ? 'Asking the model for an incident summary.' : 'No summary generated yet.'}
+              </p>
+            )}
+
+            {status === 'error' && (
+              <div role="alert" className="flex items-center justify-between gap-3 bg-wash px-3 py-2.5">
+                <span className="flex items-center gap-2 text-[13px] text-crit">
+                  <WarningIcon size={15} weight="bold" aria-hidden="true" /> {error}
+                </span>
+                <Button variant="alert" onClick={generate}>Retry</Button>
+              </div>
+            )}
+
+            {summary && (
+              <div className="space-y-4">
+                <p className="text-xs text-ink-mute">
+                  Written by {summary.provider}. <span className="font-semibold text-ink">{RISK_LABEL[summary.risk] || `${summary.risk} risk`}</span>
+                </p>
+                {[['Assessment', summary.assessment], ['Technical analysis', summary.technical], ['Recommended action', summary.action]]
+                  .filter(([, text]) => text)
+                  .map(([label, text], index) => (
+                    <div key={label}>
+                      <h4 className="text-[13px] font-semibold text-ink">{label}</h4>
+                      <p className={cn('mt-1 max-w-[65ch] leading-[1.6] text-ink', index === 0 ? 'text-[15px]' : 'text-[13.5px]')}>{text}</p>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </Block>
+
+          <Block title="Classification">
+            <p className="text-[13.5px] text-ink">
+              {threat.ai?.used ? 'AI-assisted' : 'Rule engine'}
+              {threat.ai?.used && threat.ai.confidence > 0 && <span className="text-ink-mute">, model confidence {Math.round(threat.ai.confidence)}%</span>}
+            </p>
+            <p className="mt-2 max-w-[65ch] text-[13.5px] leading-[1.6] text-ink-soft">{reasoning}</p>
+          </Block>
+
+          <p className="border-t border-rule pt-3 text-xs text-ink-mute">
+            Maps to{' '}
+            <a
+              href={`https://attack.mitre.org/techniques/${mitre.id}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 font-medium text-ink underline decoration-rule underline-offset-[3px] transition-colors hover:decoration-ink"
+            >
+              MITRE ATT&amp;CK {mitre.id}, {mitre.name}
+              <ArrowUpRightIcon size={12} aria-hidden="true" />
+            </a>
+          </p>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

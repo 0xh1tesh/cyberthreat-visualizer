@@ -1,77 +1,73 @@
 import React from 'react';
-import { CheckCircle2, Circle, FlaskConical, Pause, Play, RotateCcw, SkipBack, SkipForward, Sparkles, Terminal } from 'lucide-react';
-import { Badge, IconButton, Meter, Panel, Segmented } from './ui';
+import { ArrowCounterClockwiseIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from '@phosphor-icons/react';
+import { IconButton, Section, Tabs } from './ui';
 import { cn } from '../lib/utils';
 import { SIM_SCENARIOS } from '../hooks/useSimulation';
 
 const SCENARIO_OPTIONS = Object.values(SIM_SCENARIOS).map(({ key, label }) => ({ value: key, label }));
 
-const InfoBlock = ({ label, tone = 'text-ink-muted', children }) => (
-  <div className="border-l-2 border-line-strong bg-canvas/70 py-2 pr-3 pl-3">
-    <p className="readout">{label}</p>
-    <div className={cn('mt-1 text-sm leading-5', tone)}>{children}</div>
+const Note = ({ label, children, className }) => (
+  <div className={className}>
+    <h4 className="text-xs text-ink-mute">{label}</h4>
+    <div className="mt-1 text-[13.5px] leading-[1.55] text-ink-soft">{children}</div>
   </div>
 );
 
 export const ScenarioDetails = ({ sim }) => {
   const { currentStep, scenarioMeta } = sim;
   return (
-    <div className="flex min-h-0 flex-col gap-3">
-      <Panel title="Scenario" icon={FlaskConical}>
-        <Segmented label="Scenario" options={SCENARIO_OPTIONS} value={sim.scenario} onChange={sim.selectScenario} size="sm" />
-        <h3 className="mt-3 text-xl font-bold uppercase leading-6 tracking-[0.04em] text-ink">{scenarioMeta.title}</h3>
+    <div className="flex min-h-0 flex-col gap-8">
+      <section aria-labelledby="scenario-heading">
+        <Tabs label="Scenario" options={SCENARIO_OPTIONS} value={sim.scenario} onChange={sim.selectScenario} />
+        <h2 id="scenario-heading" className="condensed mt-4 text-[40px] leading-[0.98] font-extrabold tracking-[-0.015em] text-ink">
+          {scenarioMeta.title}
+        </h2>
         {currentStep && (
-          <div className="mt-3 space-y-3">
-            <InfoBlock label="Estimated impact" tone="text-ink">
-              <span className="font-medium">{currentStep.impactStat}</span>
-            </InfoBlock>
+          <>
+            <p className="condensed mt-4 border-l-[3px] border-crit pl-3 text-[21px] leading-6 font-semibold text-ink">
+              {currentStep.impactStat}
+            </p>
             {currentStep.focusRegion?.primary && (
-              <InfoBlock label={`Focus · ${currentStep.focusRegion.primary}`}>{currentStep.focusRegion.why}</InfoBlock>
+              <Note label={`Focus: ${currentStep.focusRegion.primary}`} className="mt-4">{currentStep.focusRegion.why}</Note>
             )}
-          </div>
+          </>
         )}
-      </Panel>
+      </section>
 
-      <Panel title="Phase insight" icon={Terminal}>
+      <Section title={currentStep ? currentStep.title : 'This phase'}>
         {currentStep ? (
-          <div className="space-y-3">
-            <div>
-              <p className="readout">Phase {String(sim.stepIndex + 1).padStart(2, '0')} / {String(sim.steps.length).padStart(2, '0')}</p>
-              <p className="mt-1 text-base font-semibold text-ink">{currentStep.title}</p>
-              <p className="mt-1.5 text-sm leading-5 text-ink-muted">{currentStep.description}</p>
-            </div>
+          <div className="space-y-4">
+            <p className="text-[14.5px] leading-[1.55] text-ink">{currentStep.description}</p>
             {currentStep.technicalInsight && (
-              <InfoBlock label="Key technique"><span className="font-mono text-xs text-ok">{currentStep.technicalInsight}</span></InfoBlock>
+              <Note label="Key technique"><span className="font-mono text-[12.5px] leading-5 text-ink">{currentStep.technicalInsight}</span></Note>
             )}
             {(currentStep.visualPattern || currentStep.arcNarrativeSummary) && (
-              <InfoBlock label="On the globe">
+              <Note label="On the globe">
                 {currentStep.visualPattern}
-                {currentStep.arcNarrativeSummary && <p className="mt-1">{currentStep.arcNarrativeSummary}</p>}
-              </InfoBlock>
+                {currentStep.arcNarrativeSummary && <span className="mt-1 block">{currentStep.arcNarrativeSummary}</span>}
+              </Note>
             )}
             {Array.isArray(currentStep.exploitBreakdown) && currentStep.exploitBreakdown.length > 0 && (
-              <InfoBlock label="How it works">
-                <ul className="list-disc space-y-1 pl-4 marker:text-ink-faint">
+              <Note label="How it works">
+                <ul className="list-disc space-y-1 pl-4 marker:text-ink-mute">
                   {currentStep.exploitBreakdown.map((item, index) => <li key={index}>{item}</li>)}
                 </ul>
-              </InfoBlock>
+              </Note>
             )}
             {currentStep.analystTakeaway && (
-              <InfoBlock label="Analyst takeaway" tone="text-warn">{currentStep.analystTakeaway}</InfoBlock>
+              <div className="bg-wash px-3 py-2.5">
+                <h4 className="text-xs font-semibold text-ink">Analyst takeaway</h4>
+                <p className="mt-1 text-[13.5px] leading-[1.55] text-ink">{currentStep.analystTakeaway}</p>
+              </div>
             )}
             {currentStep.affectedRegions?.length > 0 && (
-              <div>
-                <p className="readout mb-1.5">Countries involved</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {currentStep.affectedRegions.map((region) => <Badge key={region} tone="info">{region}</Badge>)}
-                </div>
-              </div>
+              <Note label="Countries involved">{currentStep.affectedRegions.join(', ')}</Note>
             )}
           </div>
         ) : (
-          <p className="text-[13px] text-ink-muted">Select a phase to begin.</p>
+          <p className="text-[13px] text-ink-mute">Select a phase to begin.</p>
         )}
-      </Panel>
+      </Section>
     </div>
   );
 };
@@ -79,35 +75,32 @@ export const ScenarioDetails = ({ sim }) => {
 export const SimulationControls = ({ sim, className }) => {
   const { steps, stepIndex, isPlaying, speed, complete } = sim;
   return (
-    <div className={cn('flex min-h-0 flex-col gap-3', className)}>
-      <Panel title="Playback" icon={Sparkles}>
-        <div className="flex items-center justify-center gap-3">
-          <IconButton label="Previous phase" onClick={() => sim.stepBy(-1)} disabled={stepIndex === 0}>
-            <SkipBack size={15} aria-hidden="true" />
-          </IconButton>
+    <div className={cn('flex min-h-0 flex-col gap-6', className)}>
+      <Section title="Playback">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={sim.togglePlay}
-            aria-label={isPlaying ? 'Pause' : complete ? 'Replay' : 'Play'}
-            className="hud grid size-12 place-items-center border border-info/60 bg-info/10 text-info transition-colors hover:bg-info/20"
+            className="inline-flex h-10 items-center gap-2 bg-ink px-4 text-[14px] font-semibold text-paper transition-[background-color,transform] hover:bg-ink/85 active:translate-y-px"
           >
-            {isPlaying ? <Pause size={18} aria-hidden="true" /> : complete ? <RotateCcw size={18} aria-hidden="true" /> : <Play size={18} className="translate-x-px" aria-hidden="true" />}
+            {isPlaying ? <PauseIcon size={16} weight="fill" aria-hidden="true" /> : complete ? <ArrowCounterClockwiseIcon size={16} weight="bold" aria-hidden="true" /> : <PlayIcon size={16} weight="fill" aria-hidden="true" />}
+            {isPlaying ? 'Pause' : complete ? 'Replay' : 'Play'}
           </button>
-          <IconButton label="Next phase" onClick={() => sim.stepBy(1)} disabled={stepIndex >= steps.length - 1}>
-            <SkipForward size={15} aria-hidden="true" />
+          <IconButton label="Previous phase" onClick={() => sim.stepBy(-1)} disabled={stepIndex === 0} className="size-10">
+            <SkipBackIcon size={17} weight="fill" aria-hidden="true" />
           </IconButton>
-        </div>
+          <IconButton label="Next phase" onClick={() => sim.stepBy(1)} disabled={stepIndex >= steps.length - 1} className="size-10">
+            <SkipForwardIcon size={17} weight="fill" aria-hidden="true" />
+          </IconButton>
 
-        <div className="mt-4 flex items-center justify-between">
-          <span className="readout">Speed</span>
-          <div className="inline-flex border border-line bg-canvas p-0.5" role="group" aria-label="Playback speed">
+          <div className="ml-auto flex items-center gap-1" role="group" aria-label="Playback speed">
             {[1, 2, 5].map((value) => (
               <button
                 key={value}
                 type="button"
                 aria-pressed={speed === value}
                 onClick={() => sim.setSpeed(value)}
-                className={cn('border px-2.5 py-1 font-mono text-xs tabular transition-colors', speed === value ? 'border-info/50 bg-info/10 text-info' : 'border-transparent text-ink-muted hover:text-ink')}
+                className={cn('h-7 min-w-8 px-1.5 text-[12.5px] font-medium tabular transition-colors', speed === value ? 'bg-ink text-paper' : 'text-ink-mute hover:text-ink')}
               >
                 {value}×
               </button>
@@ -115,21 +108,24 @@ export const SimulationControls = ({ sim, className }) => {
           </div>
         </div>
 
-        <div className="mt-4 border-t border-dashed border-line-strong pt-3">
-          <div className="mb-1.5 flex justify-between">
-            <span className="readout">Progress</span>
-            <span className="font-mono text-xs tabular text-info">{stepIndex + 1} / {steps.length}</span>
-          </div>
-          <div role="progressbar" aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={stepIndex + 1} aria-label="Scenario progress">
-            <Meter value={(stepIndex + 1) / steps.length} className="h-2" />
-          </div>
+        <div
+          className="mt-4 flex gap-0.5"
+          role="progressbar"
+          aria-valuemin={1}
+          aria-valuemax={steps.length}
+          aria-valuenow={stepIndex + 1}
+          aria-label={`Phase ${stepIndex + 1} of ${steps.length}`}
+        >
+          {steps.map((step, index) => (
+            <span key={step.id} className={cn('h-1 flex-1 transition-colors duration-300', index <= stepIndex ? 'bg-ink' : 'bg-rule')} />
+          ))}
         </div>
-      </Panel>
+        <p className="mt-1.5 text-xs text-ink-mute tabular">Phase {stepIndex + 1} of {steps.length}</p>
+      </Section>
 
-      <Panel title="Phases" icon={Terminal} className="min-h-0 flex-1" bodyClassName="scroll-thin max-h-full overflow-y-auto">
-        <ol className="space-y-1.5">
+      <Section title="Timeline" className="flex min-h-0 flex-1 flex-col" bodyClassName="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <ol>
           {steps.map((step, index) => {
-            const done = index < stepIndex;
             const current = index === stepIndex;
             return (
               <li key={step.id}>
@@ -138,21 +134,18 @@ export const SimulationControls = ({ sim, className }) => {
                   onClick={() => sim.goToStep(index)}
                   aria-current={current ? 'step' : undefined}
                   className={cn(
-                    'flex w-full items-start gap-2.5 border px-2.5 py-2 text-left transition-colors',
-                    current ? 'border-info/40 bg-info/5' : 'border-transparent hover:bg-raised',
+                    'grid w-full grid-cols-[1.75rem_minmax(0,1fr)] items-baseline gap-2 px-2 py-2 text-left transition-colors',
+                    current ? 'bg-ink text-paper' : index < stepIndex ? 'text-ink-soft hover:bg-wash' : 'text-ink-mute hover:bg-wash hover:text-ink',
                   )}
                 >
-                  {done ? <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-ok" aria-hidden="true" /> : <Circle size={15} className={cn('mt-0.5 shrink-0', current ? 'text-info' : 'text-ink-faint')} aria-hidden="true" />}
-                  <span className="min-w-0">
-                    <span className="readout block">Phase {String(index + 1).padStart(2, '0')}</span>
-                    <span className={cn('block text-sm leading-5', current ? 'text-ink' : 'text-ink-muted')}>{step.title}</span>
-                  </span>
+                  <span className="condensed text-[15px] font-bold tabular">{index + 1}</span>
+                  <span className="text-[13.5px] leading-5">{step.title}</span>
                 </button>
               </li>
             );
           })}
         </ol>
-      </Panel>
+      </Section>
     </div>
   );
 };

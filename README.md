@@ -16,7 +16,8 @@
 ##  Description
 
 Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboard that aggregates live threat intelligence from multiple OSINT sources, AbuseIPDB, AlienVault OTX, Shodan, and IPInfo and renders the data on an interactive 3D globe. Incoming threat events are automatically classified into attack categories (DDoS, Malware, Port Scan) using a rule-based scoring engine augmented by a Gemini AI or OpenAI layer. The dashboard surface includes real-time arc animations on the globe, a threat feed panel, analyst-grade detail cards, and an AI-powered threat report generator.
-<img width="1860" height="1042" alt="Threat Globe dashboard: live threat arcs on a globe inside a scope ring, with threat condition, top origins, data sources, observations, severity mix and the threat feed" src="docs/dashboard.png" />
+<img width="1872" height="1170" alt="Threat Globe dashboard in the light theme: a printed-atlas globe with threat routes converging on the monitoring node, a written threat-condition summary with top origins and data sources on the left, and the threat feed ranked by score on the right" src="docs/dashboard.png" />
+<img width="1872" height="1170" alt="Threat Globe dashboard in the dark theme with the same layout" src="docs/dashboard-dark.png" />
 
 
 
