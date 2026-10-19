@@ -277,6 +277,16 @@ const aiRateLimiter = rateLimit({
   message: { error: 'Too many AI requests. Please slow down.' },
 });
 
+// /api/threats is cheap when cached, but a miss fans out to every provider and the AI layer,
+// and mode/threshold are client-controlled cache keys, so it needs its own (looser) budget.
+const threatsRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.THREATS_RATE_LIMIT_PER_MIN) || 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+
 const CACHE_TTL_MS = 60 * 1000;
 const REQUEST_TIMEOUT_MS = 4500;
 const ABUSE_DAILY_SAFE_THRESHOLD = 4;
@@ -829,6 +839,11 @@ function buildSignalHash(signals = {}) {
   ].join('|');
 }
 
+// The kind carries the resolved provider so a verdict cached for one model is never served for another.
+function aiCacheKind(kind, mode) {
+  return `${kind}:${getAiProviderCacheKey(mode)}`;
+}
+
 function buildAiCacheKey(kind, payload = {}) {
   const ip = String(payload.sourceIp || payload.ip || 'unknown').trim() || 'unknown';
   const signalShape = {
@@ -1113,6 +1128,10 @@ async function classifyWithGemini(data) {
     }
 
     const text = json.candidates[0].content.parts[0].text;
+    if (typeof text !== 'string' || !text.trim()) {
+      console.warn('[Gemini Classify] Candidate has no text part');
+      return { result: null, error: buildAiError(AI_ERROR_CODES.UPSTREAM_HTTP_ERROR, 'gemini_no_text', 'gemini') };
+    }
     console.log(`[Gemini Classify] Raw response (${text.length} chars): ${truncateForLog(text, 200)}`);
 
     let parsed;
@@ -1304,8 +1323,9 @@ function buildAiReportAttemptResult({
 }
 
 function isAiTimeoutError(err) {
-  const message = String(err?.message || '').toLowerCase();
-  return message.includes('timed out') || message.includes('timeout');
+  // fetchWithTimeout aborts with "This operation was aborted", so the error name matters, not just the text.
+  if (isProviderTimeoutError(err)) return true;
+  return String(err?.message || '').toLowerCase().includes('timeout');
 }
 
 function sanitizeIpInput(value) {
@@ -1574,7 +1594,7 @@ async function generateAiReportSummary(threat, mode = resolveDefaultAiProviderMo
   }
 
   const payload = buildReportThreatPayload(threat);
-  const reportCacheKey = buildAiCacheKey('report', {
+  const reportCacheKey = buildAiCacheKey(aiCacheKind('report', mode), {
     sourceIp: payload.ip,
     abuseConfidenceScore: payload.abuseConfidenceScore,
     otxHits: payload.otxHits,
@@ -1757,7 +1777,7 @@ async function applyOptionalAiLayer(ruleThreat, mode, threshold = 70, options = 
   }
 
   // Cache reads are free, so they come before every cost gate.
-  const cacheKey = buildAiCacheKey('classify', ruleThreat);
+  const cacheKey = buildAiCacheKey(aiCacheKind('classify', mode), ruleThreat);
   const cachedOutcome = readAiCache(cacheKey);
   if (cachedOutcome) {
     incrementAiMetric('cacheHits');
@@ -2610,8 +2630,8 @@ async function handleThreatsRequest(req, res) {
   }
 }
 
-app.get('/api/threats', handleThreatsRequest);
-app.post('/api/threats', handleThreatsRequest);
+app.get('/api/threats', threatsRateLimiter, handleThreatsRequest);
+app.post('/api/threats', threatsRateLimiter, handleThreatsRequest);
 
 // ── Manual AI Analysis Endpoint ────────────────────────────────
 app.post('/api/analyze', aiRateLimiter, async (req, res) => {
@@ -2656,7 +2676,7 @@ app.post('/api/analyze', aiRateLimiter, async (req, res) => {
   };
 
   // Check AI cache first
-  const cacheKey = buildAiCacheKey('analyze', { sourceIp: ip, signals: { abuseScore, otxHits, portExposure } });
+  const cacheKey = buildAiCacheKey(aiCacheKind('analyze', aiSelection.mode), { sourceIp: ip, signals: { abuseScore, otxHits, portExposure } });
   const cached = readAiCache(cacheKey);
   if (cached?.result) {
     console.log(`[Analyze] Cache hit for ${ip}`);
