@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white">
+  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black">
-  <img alt="Vite" src="https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -27,7 +27,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 | Layer | Technology |
 |---|---|
-| Frontend framework | React 18 + Vite 5 |
+| Frontend framework | React 18 + Vite 7 |
 | 3D globe | Globe.gl + Three.js |
 | Styling | Tailwind CSS v4 |
 | Charts | Recharts |
@@ -41,7 +41,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 ##  Prerequisites
 
-- **Node.js** `>= 18.x` ([download](https://nodejs.org/))
+- **Node.js** `^20.19` or `>= 22.12` for the frontend tooling (Vite 7, Vitest 4); the Express server alone runs on 18+ ([download](https://nodejs.org/))
 - **npm** `>= 9.x` (bundled with Node.js)
 - API keys for at least one threat intelligence provider (see [Environment Variables](#-environment-variables) below)
 
@@ -180,7 +180,7 @@ npm run lint    # ESLint
 npm run build   # production build
 ```
 
-The server tests blank every provider key before loading the app, so they never call real APIs even if `server/.env` exists. The test tooling needs Node.js 20 or newer; the app itself runs on Node.js 18+.
+The server tests blank every provider key before loading the app, so they never call real APIs even if `server/.env` exists. The frontend build and test tooling need Node.js 20.19+ (or 22.12+); the Express server itself runs on Node.js 18+.
 
 ---
 
