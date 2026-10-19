@@ -11,6 +11,7 @@ Object.assign(process.env, {
   GEMINI_API_KEY: 'test-gemini-key',
   AI_PROVIDER: 'gemini',
   AI_RATE_LIMIT_PER_MIN: '3',
+  THREATS_RATE_LIMIT_PER_MIN: '2',
   GEMINI_MAX_RPM: '1000',
   GEMINI_MAX_RPD: '10000',
   CORS_ORIGIN: 'http://localhost:5173',
@@ -226,6 +227,25 @@ describe('AI layer', () => {
     }
   });
 
+  it('reports an aborted (timed out) call as a timeout, not a network error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('This operation was aborted', 'AbortError')));
+    const result = await api.applyOptionalAiLayer(makeThreat({ sourceIp: '1.1.1.6' }), 'gemini', 70, { explicitRequest: true });
+    expect(result.ai.used).toBe(false);
+    expect(result.ai.reasonCode).toBe('timeout');
+  });
+
+  it('treats a Gemini candidate without text as an upstream error instead of crashing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ content: { parts: [{}] } }] }),
+      text: async () => '',
+    }));
+    const result = await api.applyOptionalAiLayer(makeThreat({ sourceIp: '1.1.1.7' }), 'gemini', 70, { explicitRequest: true });
+    expect(result.ai.used).toBe(false);
+    expect(result.ai.reasonCode).toBe('upstream_http_error');
+  });
+
   it('never sends the gemini key in the request URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue(geminiReply({ type: 'SCAN', confidence: 80, reasoning: 'x' }));
     vi.stubGlobal('fetch', fetchMock);
@@ -260,6 +280,17 @@ describe('HTTP surface', () => {
     const res = await request('/api/nope');
     expect(res.status).toBe(404);
     expect(res.json).toEqual({ error: 'not_found' });
+  });
+
+  it('rate limits the threats endpoint, whose cache misses fan out to providers', async () => {
+    // Every provider call fails fast, so aggregation never leaves the process.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    const statuses = [];
+    for (let i = 0; i < 3; i += 1) {
+      statuses.push((await request('/api/threats')).status);
+    }
+    expect(statuses.slice(0, 2)).toEqual([200, 200]);
+    expect(statuses[2]).toBe(429);
   });
 
   it('validates input on the paid AI endpoints, then rate limits them', async () => {

@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white">
+  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black">
-  <img alt="Vite" src="https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -27,7 +27,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 | Layer | Technology |
 |---|---|
-| Frontend framework | React 18 + Vite 5 |
+| Frontend framework | React 18 + Vite 7 |
 | 3D globe | Globe.gl + Three.js |
 | Styling | Tailwind CSS v4 |
 | Charts | Recharts |
@@ -41,7 +41,7 @@ Cyberthreat Visualizer is a full-stack SOC (Security Operations Center) dashboar
 
 ##  Prerequisites
 
-- **Node.js** `>= 18.x` ([download](https://nodejs.org/))
+- **Node.js** `^20.19` or `>= 22.12` for the frontend tooling (Vite 7, Vitest 4); the Express server alone runs on 18+ ([download](https://nodejs.org/))
 - **npm** `>= 9.x` (bundled with Node.js)
 - API keys for at least one threat intelligence provider (see [Environment Variables](#-environment-variables) below)
 
@@ -109,9 +109,10 @@ Copy `server/.env.example` to `server/.env` and populate the values below. The `
 | `GEMINI_MAX_RPM` / `GEMINI_MAX_RPD` | No | Local free-tier guard: max Gemini requests per minute / per day (defaults: `5` / `20`) | — |
 | `AI_MODEL` | No | OpenAI model to use (default: `gpt-4o-mini`) | — |
 | `AI_CLASSIFIER_TIMEOUT_MS` | No | Max ms to wait for AI before fallback (default: `800`) | — |
-| `AI_REPORT_TIMEOUT_MS` | No | Max ms to wait for AI report generation; `0` = no timeout | — |
+| `AI_REPORT_TIMEOUT_MS` | No | Max ms to wait for AI report generation, 1000-120000; `0` or unset = 10000 | — |
 | `CORS_ORIGIN` | No | Comma-separated browser origins allowed to call the API (default: the local Vite dev/preview origins) | — |
 | `AI_RATE_LIMIT_PER_MIN` | No | Per-client rate limit for `/api/analyze` and `/api/report` (default: `10`) | — |
+| `THREATS_RATE_LIMIT_PER_MIN` | No | Per-client rate limit for `/api/threats` (default: `60`; the UI polls about 8 times a minute) | — |
 | `ABUSE_REFRESH_MS` | No | How often the AbuseIPDB blacklist is refreshed; the default of 6 hours keeps free-plan quota safe | — |
 | `SENSOR_LAT` / `SENSOR_LNG` | No | Location of the neutral monitoring node all arcs end at (default: `20` / `0`) | — |
 
@@ -179,7 +180,7 @@ npm run lint    # ESLint
 npm run build   # production build
 ```
 
-The server tests blank every provider key before loading the app, so they never call real APIs even if `server/.env` exists. The test tooling needs Node.js 20 or newer; the app itself runs on Node.js 18+.
+The server tests blank every provider key before loading the app, so they never call real APIs even if `server/.env` exists. The frontend build and test tooling need Node.js 20.19+ (or 22.12+); the Express server itself runs on Node.js 18+.
 
 ---
 
