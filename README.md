@@ -109,9 +109,10 @@ Copy `server/.env.example` to `server/.env` and populate the values below. The `
 | `GEMINI_MAX_RPM` / `GEMINI_MAX_RPD` | No | Local free-tier guard: max Gemini requests per minute / per day (defaults: `5` / `20`) | — |
 | `AI_MODEL` | No | OpenAI model to use (default: `gpt-4o-mini`) | — |
 | `AI_CLASSIFIER_TIMEOUT_MS` | No | Max ms to wait for AI before fallback (default: `800`) | — |
-| `AI_REPORT_TIMEOUT_MS` | No | Max ms to wait for AI report generation; `0` = no timeout | — |
+| `AI_REPORT_TIMEOUT_MS` | No | Max ms to wait for AI report generation, 1000-120000; `0` or unset = 10000 | — |
 | `CORS_ORIGIN` | No | Comma-separated browser origins allowed to call the API (default: the local Vite dev/preview origins) | — |
 | `AI_RATE_LIMIT_PER_MIN` | No | Per-client rate limit for `/api/analyze` and `/api/report` (default: `10`) | — |
+| `THREATS_RATE_LIMIT_PER_MIN` | No | Per-client rate limit for `/api/threats` (default: `60`; the UI polls about 8 times a minute) | — |
 | `ABUSE_REFRESH_MS` | No | How often the AbuseIPDB blacklist is refreshed; the default of 6 hours keeps free-plan quota safe | — |
 | `SENSOR_LAT` / `SENSOR_LNG` | No | Location of the neutral monitoring node all arcs end at (default: `20` / `0`) | — |
 
